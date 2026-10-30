@@ -1,0 +1,7 @@
+raw/
+build/
+_site/
+__pycache__/
+.claude/
+node_modules/
+web/app.js
