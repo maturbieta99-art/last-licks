@@ -84,15 +84,16 @@ export function conversions(category, prof, ctx) {
   let toHit = 0, toOut = 0, toSingle = 0;
   if (category === 'OUT') {
     if (prof.bb === 'G' && infield && prof.field !== 1 && prof.field !== 2) {
-      if (align.inf === 'in') toHit += 0.22;
-      else if (align.inf === 'corners' && (prof.field === 3 || prof.field === 5)) toHit += 0.12;
-      else if (align.inf === 'dp') toHit += 0.03;
-      else if (align.inf === 'lines') toHit += 0.03;
-      if (align.shift && ctx.batSide === 'L' && (prof.field === 5 || prof.field === 6) && prof.pull === 'oppo') toHit += 0.4;
+      if (align.inf === 'in') toHit += 0.09;
+      else if (align.inf === 'corners' && (prof.field === 3 || prof.field === 5)) toHit += 0.05;
+      else if (align.inf === 'dp') toHit += 0.02;
+      else if (align.inf === 'lines') toHit += 0.02;
+      if (align.shift && ctx.batSide === 'L' && (prof.field === 5 || prof.field === 6) && prof.pull === 'oppo') toHit += 0.3;
       if (d < 50) toHit += 0.007 * (50 - d);
     }
+    if (prof.bb === 'L' && isOF && align.of === 'deep') toHit += 0.06;
     if (prof.bb === 'F' && isOF) {
-      if (align.of === 'deep' && prof.depth === 'shallow') toHit += 0.12;
+      if (align.of === 'deep' && prof.depth === 'shallow') toHit += 0.25;
       if (align.of === 'shallow' && prof.depth === 'deep') toHit += 0.25;
       if (d < 50) toHit += 0.004 * (50 - d);
     }
@@ -114,8 +115,8 @@ export function conversions(category, prof, ctx) {
     }
     if ((prof.bb === 'L' || prof.bb === 'F') && isOF) {
       if (d > 50) toOut += 0.005 * (d - 50);
-      if (align.of === 'shallow' && category === 'B1') toOut += 0.18;
-      if (align.of === 'deep' && category !== 'B1') { toOut += 0.22; toSingle += 0.3; }
+      if (align.of === 'shallow' && category === 'B1') toOut += prof.bb === 'F' ? 0.25 : 0.04;
+      if (align.of === 'deep' && category !== 'B1') { toOut += 0.08; toSingle += 0.3; }
     }
     if (category === 'B2' && align.inf === 'lines' && prof.depth === 'line') toSingle += 0.7;
     if (category === 'B2' && align.inf === 'lines' && (prof.field === 7 || prof.field === 9)) toSingle += 0.2;

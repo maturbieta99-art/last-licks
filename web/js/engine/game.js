@@ -139,10 +139,11 @@ const api = {
   matchup() {
     const bt = this.bat(), ft = this.fld();
     const b = this.batter();
-    const key = `${b.pid}|${ft.pitcher}|${Math.round(this.pitcherTired(ft) * 20)}|${this.tto(ft, b.pid)}`;
+    const loaded = !!(this.bases[0] && this.bases[1] && this.bases[2]);
+    const key = `${b.pid}|${ft.pitcher}|${Math.round(this.pitcherTired(ft) * 20)}|${this.tto(ft, b.pid)}|${loaded}`;
     if (this._mkey !== key) {
       this._mkey = key;
-      this._m = buildMatchup(this.P(b.pid), this.pitcherObj(), { lg: this.lg, tired: this.pitcherTired(ft), tto: this.tto(ft, b.pid) });
+      this._m = buildMatchup(this.P(b.pid), this.pitcherObj(), { lg: this.lg, tired: this.pitcherTired(ft), tto: this.tto(ft, b.pid), basesLoaded: loaded });
     }
     return this._m;
   },
@@ -155,6 +156,7 @@ const api = {
       lg: this.lg, roe: this.lg.roe || 0.014, def: this.defRatings(ft), arms: this.armRatings(ft),
       align: ft.align, batSide: side, catcherArm: this.armRatings(ft)[2],
       lateClose: this.inning >= 8 && Math.abs(this.score[0] - this.score[1]) <= 2,
+      pitcherStuff: pit.p ? pit.p.stf : 45,
       pitcherThrows: pit.t, bigBases: this.rules.bigBases, pickoffs: this.pickoffsThisPA,
       gbTilt: 1, ...extra,
     };

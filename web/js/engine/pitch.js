@@ -172,6 +172,17 @@ function approachMods(approach, cls) {
 // ---------------------------------------------------------------- matchup
 // Builds everything needed to play and evaluate one batter vs one pitcher.
 export function buildMatchup(batter, pitcher, ctx) {
+  const M = buildCalibrated(batter, pitcher, ctx);
+  if (ctx.basesLoaded) {
+    // with nowhere to put him, the pitcher attacks the zone
+    M.zCtx = 0.07;
+    M.V = M.solve();
+    M.cache = {};
+  }
+  return M;
+}
+
+function buildCalibrated(batter, pitcher, ctx) {
   const target = paTarget(batter, pitcher, ctx);
   const lg = ctx.lg;
   const eye = eyeRating(batter, lg);
@@ -192,7 +203,7 @@ export function buildMatchup(batter, pitcher, ctx) {
 
   const M = {
     batter, pitcher, ctx, target, types, zmap, bipT, tired,
-    W: 1, Z: 0, H: 0.03, corr: [1, 1, 1, 1, 1],
+    W: 1, Z: 0, H: 0.03, corr: [1, 1, 1, 1, 1], zCtx: 0,
     scatter: types.map((t) => scatterMatrix(commandOf(pitcher, tired, t.key))),
     side: battingSide(batter.b, pitcher.t),
   };
@@ -256,7 +267,7 @@ export function buildMatchup(batter, pitcher, ctx) {
       tot += x;
       return x;
     });
-    const zshare = Math.max(0.05, Math.min(0.95, ZONE_AIM[count] + M.Z));
+    const zshare = Math.max(0.05, Math.min(0.95, ZONE_AIM[count] + M.Z + M.zCtx));
     const two = count.endsWith('2') ? 1 : 0;
     return types.map((t, ti) => {
       const aim = AIM[t.cls][two];
@@ -370,7 +381,7 @@ export function catcherCall(M, count, rng) {
   const w = M.types.map((t) => t.use * (t.cls === 'F' ? lean : 1 / Math.sqrt(lean)));
   const ti = rng.pickIndex(w);
   const t = M.types[ti];
-  const zshare = Math.max(0.05, Math.min(0.95, ZONE_AIM[count] + M.Z));
+  const zshare = Math.max(0.05, Math.min(0.95, ZONE_AIM[count] + M.Z + (M.zCtx || 0)));
   const aim = AIM[t.cls][count.endsWith('2') ? 1 : 0];
   const inZ = rng.chance(zshare);
   const vecw = Array.from(inZ ? aim.zone : aim.out);

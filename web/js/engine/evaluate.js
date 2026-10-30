@@ -21,7 +21,11 @@ export function hitterValue(pl) {
 }
 
 function lineupPlayers(g, team, override) {
-  return team.lineup.map((x, i) => g.P(override && override.slot === i ? override.pid : x.pid));
+  const list = !override ? [] : Array.isArray(override) ? override : [override];
+  return team.lineup.map((x, i) => {
+    const o = list.find((y) => y.slot === i);
+    return g.P(o ? o.pid : x.pid);
+  });
 }
 
 function teamTable(g, team, pitcherPl, tired, override) {
@@ -37,11 +41,21 @@ function teamTable(g, team, pitcherPl, tired, override) {
   return R;
 }
 
+// Starting pitchers work out of the bullpen only when the season is on the line.
+export function allHands(g) {
+  return /Winner-take-all|elimination/.test(g.sc.stakes || '') || g.sc.round === 'playoff';
+}
+export function relieverPool(g, team) {
+  if (allHands(g)) return team.pen;
+  const pool = team.pen.filter((pid) => { const p = g.P(pid).p; return !p || p.role !== 'SP'; });
+  return pool.length ? pool : team.pen;
+}
+
 // who a team will most likely pitch next half
 export function projectedPitcher(g, team, exclude) {
   const cur = team.pitcher && !team.removed.has(team.pitcher) && team.pitcher !== exclude ? team.pitcher : null;
   let best = null, bestV = Infinity;
-  for (const pid of team.pen) {
+  for (const pid of relieverPool(g, team)) {
     const pl = g.P(pid);
     if (!pl.p) continue;
     const t = fatigue(pl, 0, team.energy[pid] ?? 1, false);
@@ -192,12 +206,18 @@ export function evalOffense(g, opt) {
   const batterPid = opt.batter || g.batter().pid;
   const batterPl = g.P(batterPid);
   const override = batterPid !== bt.lineup[slot].pid ? { slot, pid: batterPid } : null;
-  const R = teamTable(g, bt, pitcherPl, tired, override);
+  const overrides = override ? [override] : [];
   let bases = g.baseState();
   if (opt.runners) {
-    bases = bases.map((r, i) => (r && opt.runners[i] && opt.runners[i] !== r.pid ? { ...g.runnerObj(opt.runners[i]), resp: r.resp } : r));
+    bases = bases.map((r, i) => {
+      if (!(r && opt.runners[i] && opt.runners[i] !== r.pid)) return r;
+      const rs = bt.lineup.findIndex((x) => x.pid === r.pid);
+      if (rs >= 0) overrides.push({ slot: rs, pid: opt.runners[i] });
+      return { ...g.runnerObj(opt.runners[i]), resp: r.resp };
+    });
   }
-  const ctx = { ...g.situationCtx(), pitcherPl, tired };
+  const R = teamTable(g, bt, pitcherPl, tired, overrides);
+  const ctx = { ...g.situationCtx(), pitcherPl, tired, pitcherStuff: pitcherPl.p ? pitcherPl.p.stf : 45 };
   const count = g.count;
   const M = override ? matchupFor(g, batterPl, pitcherPl, tired) : g.matchup();
   const zoneP = 0.47;
@@ -242,7 +262,7 @@ export function defenseOptions(g, opts = {}) {
   const canChange = g.canChangePitcher(ft.side).ok || !ft.pitcher || ft.removed.has(ft.pitcher);
   if (canChange) {
     const batterPl = g.P(g.batter().pid);
-    const ranked = ft.pen.map((pid) => {
+    const ranked = relieverPool(g, ft).map((pid) => {
       const pl = g.P(pid);
       const t = fatigue(pl, 0, ft.energy[pid] ?? 1, false);
       const d = paTarget(batterPl, pl, { lg: g.lg, tired: t });
@@ -293,8 +313,8 @@ export function offenseOptions(g, opts = {}) {
 // ---------------------------------------------------------------- grading
 export function gradeOf(delta) {
   const d = delta * 100;
-  if (d <= 0.5) return 'green';
-  if (d <= 2) return 'yellow';
+  if (d <= 0.75) return 'green';
+  if (d <= 2.25) return 'yellow';
   if (d <= 5) return 'orange';
   return 'red';
 }

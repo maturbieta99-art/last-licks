@@ -1,0 +1,22 @@
+import { readFileSync } from 'node:fs';
+import { createGame } from '../web/js/engine/game.js';
+import { evalOffense, forSide } from '../web/js/engine/evaluate.js';
+import { stealProb, stealBranches } from '../web/js/engine/tactics.js';
+const sh = JSON.parse(readFileSync(new URL('../web/data/s-2000.json', import.meta.url)));
+const sc = sh.scenarios['BOS200410170'];
+const k = sc.history.findIndex((h, i) => h.i === 12 && h.h === 1 && h.o0 === 0 && h.r0[0]);
+const g = createGame(sc, sh, { userSide: -1, seed: 'd', startIdx: k });
+const r1 = g.bases[0];
+console.log('state', g.inning, g.half, g.outs, g.score, 'runner', r1.name, 'spd', r1.spd, 'stl', r1.stl, 'batter', g.P(g.batter().pid).l);
+const ctx = { ...g.situationCtx() };
+console.log('stealProb', stealProb(r1, 2, ctx).toFixed(3), 'catcherArm', ctx.catcherArm, 'lg sbpct', g.lg.sbpct);
+for (const t of ['swing', 'steal2']) console.log(t, (forSide(evalOffense(g, { tactic: t }).wp, 1) * 100).toFixed(1));
+// WP of the resulting states directly
+const g2 = createGame(sc, sh, { userSide: -1, seed: 'd', startIdx: k });
+g2.bases = [null, g2.bases[0], null];
+console.log('runner on 2nd, 0 out (same batter, 0-0):', (forSide(evalOffense(g2, { tactic: 'swing' }).wp, 1) * 100).toFixed(1));
+const g3 = createGame(sc, sh, { userSide: -1, seed: 'd', startIdx: k });
+g3.bases = [null, null, null]; g3.outs = 1;
+console.log('empty, 1 out (same batter):', (forSide(evalOffense(g3, { tactic: 'swing' }).wp, 1) * 100).toFixed(1));
+const brs = stealBranches(g.baseState(), 2, ctx, g.count, 0.47);
+console.log(brs.map((b) => `${b.p.toFixed(3)} outs+${b.outs} same=${b.sameBatter} count=${b.count ? b.count.b + '-' + b.count.s : '-'} bases=${b.bases.map((x) => (x ? 1 : 0)).join('')}`).join('\n'));

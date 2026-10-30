@@ -6,7 +6,7 @@
 // options with the win-probability model, with era-flavored tendencies.
 
 import { maskOf } from './wp.js';
-import { evalDefense, evalOffense, projectedPitcher, tacticOptions, forSide } from './evaluate.js';
+import { evalDefense, evalOffense, projectedPitcher, tacticOptions, forSide, relieverPool } from './evaluate.js';
 import { fatigue } from './model.js';
 
 function eraTendency(season) {
@@ -91,7 +91,7 @@ function aiDefense(g, side, T, mirrored) {
   let bestPid = null, bestWp = base;
   if (can && ft.pen.length) {
     const tired = g.pitcherTired(ft);
-    const cands = ft.pen.slice().sort((a, b) => (ft.energy[b] ?? 1) - (ft.energy[a] ?? 1)).slice(0, 6);
+    const cands = relieverPool(g, ft).slice().sort((a, b) => (ft.energy[b] ?? 1) - (ft.energy[a] ?? 1)).slice(0, 6);
     for (const pid of cands) {
       const wp = forSide(evalDefense(g, { pid }).wp, side);
       // starters lose more as they tire; managers pull them faster when they do

@@ -30,9 +30,9 @@ export function stealProb(runner, base, ctx) {
   const lgp = (ctx.lg && ctx.lg.sbpct) || 0.68;
   const spd = runner.spd || 50;
   const skill = runner.stl || lgp;
-  let p = 0.45 * lgp + 0.55 * skill + 0.006 * (spd - 50) - 0.005 * ((ctx.catcherArm || 50) - 50);
+  let p = 0.4 * lgp + 0.6 * skill + 0.002 * (spd - 50) - 0.005 * ((ctx.catcherArm || 50) - 50);
   if (base === 2 && ctx.pitcherThrows === 'L') p -= 0.07;
-  if (base === 3) p += 0.04;
+  if (base === 3) p -= 0.02;
   if (base === 4) p = 0.12 + 0.004 * (spd - 50);
   if (ctx.offspeed) p += 0.05;
   if (ctx.pitchout) p -= 0.32;
@@ -62,7 +62,7 @@ export function stealBranches(bases, which, ctx, count, zoneP) {
     plays.push([ps, 0, [r1, r2, null], [r3], `${nm(r3)} steals home`]);
     plays.push([1 - ps, 1, [r1, r2, null], [], `${nm(r3)} is out at the plate`]);
   } else if (which === 'double' && r1 && r2) {
-    const ps = clamp(stealProb(r2, 3, ctx) + 0.04, 0.05, 0.97);
+    const ps = clamp(stealProb(r2, 3, ctx) - 0.04, 0.05, 0.95);
     plays.push([ps, 0, [null, r1, r2], [], 'double steal']);
     plays.push([1 - ps, 1, [null, r1, null], [], 'the lead runner is thrown out at third']);
   }
@@ -91,7 +91,7 @@ export function buntBranches(kind, bases, outs, batter, ctx, count) {
   const skill = batter.bnt || 45;
   const spd = batter.spd || 50;
   const corners = !!(ctx.align && ctx.align.inf === 'corners');
-  let contact = clamp(0.8 + 0.006 * (skill - 50), 0.45, 0.95);
+  let contact = clamp(0.8 + 0.006 * (skill - 50) - 0.004 * ((ctx.pitcherStuff || 50) - 50), 0.4, 0.95);
   if (ctx.pitchout) contact = 0.12;
   const foulShare = clamp(0.3 - 0.004 * (skill - 50), 0.1, 0.45) * (kind === 'squeeze' ? 0.8 : 1);
   const fair = contact * (1 - foulShare);
@@ -103,7 +103,7 @@ export function buntBranches(kind, bases, outs, batter, ctx, count) {
   };
 
   if (kind === 'squeeze' && r3) {
-    const score = clamp(0.88 + 0.003 * (skill - 50), 0.6, 0.97);
+    const score = clamp(0.88 + 0.003 * (skill - 50) - (r1 && r2 ? 0.3 : 0), 0.4, 0.97);
     add(fair * score * 0.85, 1, [null, r1, r2], [r3], 'squeeze bunt, the run scores');
     add(fair * score * 0.15, 0, [BATTER, r1, r2], [r3], 'squeeze bunt, everyone is safe');
     add(fair * (1 - score), 1, [BATTER, r1, r2], [], 'squeeze bunt, the runner is out at the plate');
@@ -139,8 +139,9 @@ export function buntBranches(kind, bases, outs, batter, ctx, count) {
   const forceLead = clamp(0.15 - 0.004 * (skill - 50) + (corners ? 0.1 : 0), 0.05, 0.35);
   const pop = clamp(1 - succ - hit - forceLead, 0.02, 0.2);
   const tot = succ + hit + forceLead + pop;
-  const sac = allUp(bases, null);
-  add(fair * succ / tot, 1, sac.bases, outs < 2 ? sac.scored : [], 'sacrifice bunt, the runners move up');
+  const loaded = !!(r1 && r2 && r3);
+  const sacBases = loaded ? [null, r1, r2] : r3 ? [null, r1 || r2, r3] : [null, r1, r2];
+  add(fair * succ / tot, 1, sacBases, loaded ? [r3] : [], 'sacrifice bunt, the runners move up');
   const single = allUp(bases, BATTER);
   add(fair * hit / tot, 0, single.bases, single.scored, 'bunt single');
   let fc;
