@@ -58,6 +58,12 @@ const COUNT_SWING = {
   '0-2': [1.15, 1.45], '1-2': [1.15, 1.40], '2-2': [1.15, 1.35], '3-2': [1.20, 1.25],
 };
 const COUNT_DAMAGE = { '2-0': 1.1, '3-0': 1.12, '3-1': 1.1, '2-1': 1.04, '0-2': 0.9, '1-2': 0.94 };
+// The hitter looks for a pitch in one part of the zone (the 3x3 block around
+// the cell he sits on). If it comes there he's on time; anywhere else he's
+// late or fooled. Tuned so a blind guess is worth nothing on average
+// (tests/look.mjs); reading the pitcher's tendencies pays.
+export const LOOK = { whiff: 0.25, dmg: 0.25, out: 1.45 };
+export const inLook = (cell, look) => Math.abs(cellH(cell) - cellH(look)) <= 1 && Math.abs(cellV(cell) - cellV(look)) <= 1;
 // catcher's call: share of pitches aimed in the zone, and fastball lean, by count
 const ZONE_AIM = {
   '0-0': 0.60, '1-0': 0.66, '2-0': 0.75, '3-0': 0.86, '0-1': 0.52, '1-1': 0.57,
@@ -126,6 +132,31 @@ export function scatterMatrix(command) {
   SCATTER_CACHE.set(key, S);
   return S;
 }
+
+// Share of a typical hitter's swings that come in each look region, from a
+// league-average pitch mix at an even count. The look bonus is weighed
+// against it so that guessing blind evens out.
+const LOOK_SHARE = (() => {
+  const S = scatterMatrix(0.47);
+  const act = new Float64Array(25);
+  for (const [cls, w] of [['F', 0.55], ['B', 0.3], ['O', 0.15]]) {
+    const aim = AIM[cls][0];
+    for (let t = 0; t < 25; t++) {
+      const p = 0.5 * aim.zone[t] + 0.5 * aim.out[t];
+      for (let a = 0; a < 25; a++) act[a] += w * p * S[t * 25 + a];
+    }
+  }
+  const sw = Array.from(act, (p, i) => p * SWING[CLS[i]]);
+  const tot = sw.reduce((a, b) => a + b, 0);
+  const out = {};
+  for (let v = -1; v <= 1; v++) {
+    for (let h = -1; h <= 1; h++) {
+      const look = cellIndex(h, v);
+      out[look] = sw.reduce((a, x, i) => a + (inLook(i, look) ? x : 0), 0) / tot;
+    }
+  }
+  return out;
+})();
 
 export function commandOf(pitcher, tired, typeKey) {
   const ctl = pitcher.p ? pitcher.p.ctl : 40;
@@ -209,7 +240,7 @@ function buildCalibrated(batter, pitcher, ctx) {
   };
 
   // per-pitch outcome probabilities at an actual cell
-  M.pitchProbs = function (cell, ti, count, approach, seq) {
+  M.pitchProbs = function (cell, ti, count, approach, seq, look = null) {
     const t = types[ti];
     const c = CLS[cell];
     const zone = c <= 2;
@@ -228,6 +259,13 @@ function buildCalibrated(batter, pitcher, ctx) {
     }
     let whiff = (1 - CONTACT[c]) * M.W * batWhiff * t.whiff * (1 + 0.011 * (t.q - 50)) * am.wh;
     let dmg = DAMAGE[c] * zmap[cell] * (1 - 0.008 * (t.q - 50)) * am.dmg * (COUNT_DAMAGE[count] || 1);
+    if (look !== null && look !== undefined && approach !== 'take') {
+      // a wider look pays less when it's right and costs more when it's wrong
+      const q = LOOK_SHARE[look] ?? 0.4;
+      const k = q / (1 - q);
+      if (inLook(cell, look)) { whiff *= 1 - LOOK.whiff; dmg *= 1 + LOOK.dmg; }
+      else { whiff *= 1 + LOOK.whiff * k * LOOK.out; dmg *= Math.max(0.45, 1 - LOOK.dmg * k * LOOK.out); }
+    }
     if (seq && seq.length >= 2) {
       const a = seq[seq.length - 1], b = seq[seq.length - 2];
       if (a.ti === ti && b.ti === ti) { whiff *= 0.8; dmg *= 1.1; }
@@ -402,8 +440,8 @@ export function deliver(M, ti, target, rng, extraWild = 0) {
 }
 
 // Resolve one pitch at an actual cell. Returns what happened at the plate.
-export function resolveAtPlate(M, cell, ti, count, approach, seq, rng) {
-  const r = M.pitchProbs(cell, ti, count, approach, seq);
+export function resolveAtPlate(M, cell, ti, count, approach, seq, rng, look = null) {
+  const r = M.pitchProbs(cell, ti, count, approach, seq, look);
   const x = rng.next();
   let acc = r.ball;
   if (x < acc) return { kind: 'ball', cell, ti, r };

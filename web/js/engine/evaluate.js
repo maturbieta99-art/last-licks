@@ -378,4 +378,66 @@ export function gradeOffense(g, chosen, base = {}) {
   return { grade: gradeOf(Math.max(0, best.wp - mine)), mine, best, delta: Math.max(0, best.wp - mine), results };
 }
 
+// ---------------------------------------------------------------- one pitch
+// Home win probability after each way the next pitch can end, with the same
+// batter and runners: ball, strike, foul, hit by pitch, and a ball in play by
+// result (HR, B3, B2, B1, OUT). Used to grade single pitch calls and signs.
+export function pitchOutcomes(g) {
+  const bt = g.bat(), ft = g.fld();
+  if (g.over || !ft.pitcher || ft.removed.has(ft.pitcher)) return null;
+  const pitcherPl = g.P(ft.pitcher);
+  const R = teamTable(g, bt, pitcherPl, g.pitcherTired(ft));
+  const M = g.matchup();
+  const ctx = g.situationCtx();
+  const batterPl = g.P(g.batter().pid);
+  const bases = g.baseState();
+  const { b, s } = g.count;
+  const outs = g.outs, slot = bt.slot;
+  const wpOf = (branches) => wrap(g, fromBranches(g, R, branches, outs, slot, ctx, batterPl, M));
+  const stay = (count) => [{ p: 1, outs: 0, bases, scored: [], sameBatter: true, count }];
+  const w = forcedAdvance(bases);
+  const walk = [{ p: 1, outs: 0, bases: w.bases, scored: w.scored, pa: 'BB' }];
+  const policy = (kind, runner, ps) => autoSend(ps, outs, kind, ctx);
+  return {
+    M,
+    ball: wpOf(b === 3 ? walk : stay({ b: b + 1, s })),
+    strike: wpOf(s === 2 ? [{ p: 1, outs: 1, bases, scored: [], pa: 'K' }] : stay({ b, s: s + 1 })),
+    foul: wpOf(stay({ b, s: Math.min(2, s + 1) })),
+    hbp: wpOf(walk),
+    bip: FAIR.map((cat) => wpOf(fairBallBranches(cat, ctx, outs, bases, batterPl, policy))),
+  };
+}
+
+// Expected home win probability of one pitch. choices: [weight, type index,
+// distribution over the 25 cells where it actually arrives]; the hitter's sign
+// is an approach plus an optional look.
+export function pitchValue(O, choices, count, approach, look, seq) {
+  const M = O.M;
+  let ev = 0, tot = 0;
+  for (const [w, ti, actual] of choices) {
+    for (let cell = 0; cell < 25; cell++) {
+      const pc = w * actual[cell];
+      if (pc < 1e-9) continue;
+      const r = M.pitchProbs(cell, ti, count, approach, seq, look);
+      let bip = 0;
+      if (r.inplay > 0) {
+        const d = M.bipDist(r.dmg);
+        for (let i = 0; i < 5; i++) bip += d[i] * O.bip[i];
+      }
+      ev += pc * (r.ball * O.ball + (r.cstr + r.sstr) * O.strike + r.foul * O.foul + r.hbp * O.hbp + r.inplay * bip);
+      tot += pc;
+    }
+  }
+  return tot > 0 ? ev / tot : 0;
+}
+
+// Grades for one pitch call are on a finer scale than manager calls.
+export function pitchGradeOf(delta) {
+  const d = delta * 100;
+  if (d <= 0.2) return 'green';
+  if (d <= 0.6) return 'yellow';
+  if (d <= 1.2) return 'orange';
+  return 'red';
+}
+
 export function clearCaches() { TABLES.clear(); MATCHUPS.clear(); }

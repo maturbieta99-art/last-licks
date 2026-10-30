@@ -353,7 +353,7 @@ const api = {
       return this.applyBranch(br, { pitch: pitchInfo, kind: br.prof ? 'fair' : 'hitrun', sign, hitRun: true });
     }
     const stealing = sign.steal && this.stealRunner(sign.steal) ? sign.steal : null;
-    const res = resolveAtPlate(M, cell, ti, countKey, stealing ? 'take' : (sign.approach || 'normal'), this.seq, this.rng);
+    const res = resolveAtPlate(M, cell, ti, countKey, stealing ? 'take' : (sign.approach || 'normal'), this.seq, this.rng, sign.look ?? null);
     this.seq.push({ ti, cell });
     pitchInfo.result = res.kind;
     if (res.kind === 'inplay') return this.resolveFair(res, pitchInfo, ctx, sign);
