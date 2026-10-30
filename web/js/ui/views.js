@@ -334,7 +334,7 @@ export function realManagerCalls(sc, shard, side) {
         if (/^(SB|CS)2/.test(ev) || /SB2/.test(ev)) tactic = 'steal2';
         else if (/^(SB|CS)3/.test(ev)) tactic = 'steal3';
         else if (/^(SB|CS)H/.test(ev)) tactic = 'steal4';
-        else if (/\/SH/.test(ev)) tactic = h.r0[2] && h.s1[side] > h.s0[side] ? 'squeeze' : 'sac';
+        else if (/\/(SH|BG|BP|BL)/.test(ev)) tactic = h.r0[2] && h.s1[side] > h.s0[side] ? 'squeeze' : 'sac';
         const r = gradeOffense(g, { batter, runners, tactic }, { batter: baseBatter, runners: g.bases.map((x) => (x ? x.pid : null)) });
         const bl = g.P(batter).l;
         const prDesc = runners.map((pid, i) => (pid && g.bases[i] && pid !== g.bases[i].pid ? `, ${g.P(pid).l} ran` : '')).join('');
