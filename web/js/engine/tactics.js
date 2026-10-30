@@ -122,12 +122,15 @@ export function buntBranches(kind, bases, outs, batter, ctx, count) {
     return out.filter((b) => b.p > 1e-9);
   }
   if (kind === 'drag') {
-    const hit = clamp(0.32 + 0.012 * (spd - 50) + 0.003 * (skill - 50) - (corners ? 0.15 : 0), 0.05, 0.7);
+    // bunting for a hit on the move is harder to get down, and the defense is waiting late
+    const dFair = fair * 0.8;
+    const hit = clamp(0.24 + 0.011 * (spd - 50) + 0.002 * (skill - 50) - (corners ? 0.12 : 0) - (ctx.lateClose ? 0.05 : 0), 0.05, 0.55);
     const up = allUp(bases, BATTER);
-    add(fair * hit, 0, up.bases, up.scored, 'bunt single');
+    add(dFair * hit, 0, up.bases, up.scored, 'bunt single');
     const up2 = allUp(bases, null);
-    add(fair * (1 - hit), 1, up2.bases, outs < 2 ? up2.scored : [], 'bunt, thrown out at first');
-    out.push(strikeBranch(miss + foul, count, bases, 0, 'bunt attempt missed'));
+    add(dFair * (1 - hit) * 0.88, 1, up2.bases, outs < 2 ? up2.scored : [], 'bunt, thrown out at first');
+    add(dFair * (1 - hit) * 0.12, 1, bases, [], 'bunt popped up');
+    out.push(strikeBranch(miss + foul + (fair - dFair), count, bases, 0, 'bunt attempt fouled off'));
     return out.filter((b) => b.p > 1e-9);
   }
   // sacrifice

@@ -154,6 +154,7 @@ const api = {
     return {
       lg: this.lg, roe: this.lg.roe || 0.014, def: this.defRatings(ft), arms: this.armRatings(ft),
       align: ft.align, batSide: side, catcherArm: this.armRatings(ft)[2],
+      lateClose: this.inning >= 8 && Math.abs(this.score[0] - this.score[1]) <= 2,
       pitcherThrows: pit.t, bigBases: this.rules.bigBases, pickoffs: this.pickoffsThisPA,
       gbTilt: 1, ...extra,
     };
@@ -692,7 +693,7 @@ const api = {
     }
     if (!opts.doubleSwitch) {
       const cold = t.pst[pid].cold;
-      this.emit({ kind: 'move', side, text: `Pitching change: ${this.P(pid).n} replaces ${old ? this.P(old).l : 'the pitcher'}${cold ? ' (not fully warm)' : ''}.`, move: 'pitch', pid });
+      this.emit({ kind: 'move', side, text: old ? `Pitching change: ${this.P(pid).n} replaces ${this.P(old).l}${cold ? ' (not fully warm)' : ''}.` : `${this.P(pid).n} takes the mound for the ${t.nick}.`, move: 'pitch', pid });
     }
     if (this.pending && this.pending.kind === 'needPitcher' && this.pending.side === side) this.pending = null;
     this._mkey = null;
