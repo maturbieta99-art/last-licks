@@ -69,6 +69,26 @@ export function totalStars() {
   return Object.values(load().played).reduce((n, p) => n + (p.stars ? p.stars.reduce((a, b) => a + b, 0) : 0), 0);
 }
 
+// A save code: the whole record as text, to copy somewhere safe and paste
+// back after Safari clears the site's data or on another device.
+export function exportCode() {
+  const json = JSON.stringify(load());
+  return 'LL1.' + btoa(unescape(encodeURIComponent(json)));
+}
+export function importCode(code) {
+  try {
+    const raw = String(code || '').trim().replace(/^LL1\./, '');
+    const got = JSON.parse(decodeURIComponent(escape(atob(raw))));
+    if (!got || typeof got !== 'object' || !got.totals || !got.played) return false;
+    mem = { ...blank(), ...got };
+    mem.settings = { ...blankSettings(), ...(got.settings || {}) };
+    save();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function managerStyle(t) {
   const g = Math.max(1, t.games);
   const m = t.moves;

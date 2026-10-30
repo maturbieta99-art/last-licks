@@ -9,11 +9,16 @@ into the 9th, with players rated from their real season statistics. You manage o
 dugout; the computer manages the other and makes the real manager's moves when your
 game reaches the same spot.
 
-- Call each pitch (type and location, with the batter's silhouette on the side of the
-  plate he hits from) or let the catcher call it. Every pitch lands on the zone with
-  its call stamped; routine pitches play themselves, and the game stops you for the
-  first pitch of each at-bat, the big counts and new situations ("Every pitch" turns
-  that off)
+- One screen on phones and tablets, upright or sideways: score strip, floodlit field,
+  the at-bat and a dock of big buttons; everything else slides up in a sheet.
+  Installable to the Home Screen
+- Call each pitch (type and location, with the batter standing on the side of the
+  plate he hits from) or let the catcher call it. Every pitch flies in and lands on
+  the zone with its call stamped, and every pitch call or sign gets its own grade
+  (Pitch IQ). Auto-play can let routine pitches play themselves
+- At the plate, have your hitter look for a pitch in one part of the zone, with the
+  pitcher's tendencies for the count shaded in: right guesses hit harder, wrong ones
+  get fooled, and a blind guess is worth nothing on average (`tests/look.mjs`)
 - Give signs: swing away, take, take until a strike, sit on the fastball, protect,
   sacrifice, squeeze, steal (with the runner's odds), hit and run. Runners carry
   speed ratings and bolts on the field
@@ -25,7 +30,10 @@ game reaches the same spot.
 - A coach explains every button in plain English for new players; a hand-picked
   first game; three stars to earn on every game
 - Today's game (a new one each day), Win or Go Home, playlists by situation, and the
-  full archive of 500
+  full archive of 500. Share cards and challenge links (same game, same luck); save
+  codes to back up a record
+- A Season Pass (`web/js/ui/pass.js`, off until the Lemon Squeezy product is live)
+  can lock the archive behind a license key, checked from the browser
 - A night-game look: floodlit field, light-bulb scoreboard, ballpark sound made in
   code (with a mute button)
 
@@ -39,8 +47,9 @@ game reaches the same spot.
 - `web/js/engine/` is the game: pitch-level model, batted balls and baserunning,
   tactics, win probability, grading and the AI manager. `web/js/ui/` is the interface.
 - `tests/` run with Node: `node tests/calib.mjs`, `node tests/wp.mjs`,
-  `node tests/simall.mjs 500`, `node tests/starts.mjs`, and `node tests/pace.mjs`
-  (how often the default pacing stops for the player).
+  `node tests/simall.mjs 500`, `node tests/starts.mjs`, `node tests/pace.mjs`
+  (how often auto-play stops for the player), `node tests/look.mjs` (the look-for-a-pitch
+  fairness check) and `node tests/pitchgrade.mjs` (the pitch-call grade scale).
 
 ## Working on it
 

@@ -1,15 +1,18 @@
 // Game screen: you manage one dugout; the AI manages the other.
-// Every pitch gets a beat: the ball lands on the zone and the call is stamped.
-// Routine pitches play themselves (unless "every pitch" is on), so the game
-// stops you for the at-bat's first pitch, the big counts and new situations.
+// One screen on phones and tablets: score strip, field, the at-bat panel and a
+// dock of big buttons; everything else slides up in a sheet. Every pitch gets
+// a beat (the ball lands on the zone and the call is stamped) and a grade.
+// The player calls every pitch by default; with auto-play on, routine pitches
+// play themselves and the game stops for the at-bat's first pitch, the big
+// counts and new situations.
 import { createGame, POS_ABBR, ordinal } from '../engine/game.js';
 import { aiPrePA, aiSign, aiDefensePitch } from '../engine/ai.js';
-import { winProb, gradeDefense, gradeOffense, forSide } from '../engine/evaluate.js';
-import { batterGrades, paTarget, battingSide, fatigue } from '../engine/model.js';
-import { zoneMap, PITCH_TYPES, cellIndex, cellH, cellV, inZone } from '../engine/pitch.js';
-import { renderField } from './field.js';
+import { winProb, gradeDefense, gradeOffense, forSide, pitchOutcomes, pitchValue, pitchGradeOf } from '../engine/evaluate.js';
+import { paTarget, battingSide, fatigue } from '../engine/model.js';
+import { zoneMap, PITCH_TYPES, cellIndex, cellH, cellV, inZone, inLook } from '../engine/pitch.js';
+import { renderField, pitchFlight } from './field.js';
 import { batterSilhouette, speedLabel, speedBadge } from './art.js';
-import { teamColors } from './teams.js';
+import { teamColors, teamAbbr } from './teams.js';
 import { pop, crack, crowdReact, charge, sting, setCrowd, stopCrowd, unlock, soundOn, toggleSound } from './sound.js';
 import { SIGN_HELP, DEF_HELP, PITCH_HELP, keyRuns, runTags, mission, countTalk, stealOdds, whyDefense, whyOffense, coachOn, setCoach, tipFor, markSeen } from './coach.js';
 import { esc, pct, avg3, toast, openSheet, closeSheet } from './util.js';
@@ -26,6 +29,10 @@ export const GRADE_WORD = { green: 'Best call', yellow: 'Close', orange: 'Costly
 export const GRADE_LETTER = { green: 'A', yellow: 'B', orange: 'C', red: 'F' };
 export const GRADE_EMOJI = { green: '🟩', yellow: '🟨', orange: '🟧', red: '🟥' };
 const RESULT_CLASS = { ball: 'ball', hbp: 'ball', called: 'strike', swinging: 'strike', foul: 'foul', inplay: 'inplay' };
+const APPROACH = { normal: 'Swing away', take: 'Take', takeUntilStrike: 'Take until a strike', sitFB: 'Sit fastball', protect: 'Protect' };
+const ONESHOT = { sac: 'Sacrifice', drag: 'Bunt for a hit', squeeze: 'Suicide squeeze', safety: 'Safety squeeze', steal2: 'Steal 2nd', steal3: 'Steal 3rd', steal4: 'Steal home', double: 'Double steal', hitrun: 'Hit and run', runhit: 'Run and hit' };
+const LOOKS = [null];
+for (let v = -1; v <= 1; v++) for (let h = -1; h <= 1; h++) if (h || v) LOOKS.push(cellIndex(h, v));
 const reducedMotion = () => typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 export function energyLabel(e) {
@@ -33,6 +40,15 @@ export function energyLabel(e) {
   if (e >= 0.6) return ['ok', 'Rested'];
   if (e >= 0.35) return ['tired', 'Tired'];
   return ['gassed', 'Gassed'];
+}
+
+// Where a cell is, in the hitter's terms.
+export function spotWords(cell) {
+  const h = cellH(cell), v = cellV(cell);
+  const vert = { 2: 'high', 1: 'up', 0: '', '-1': 'down', '-2': 'in the dirt' }[v];
+  const horiz = { 2: 'way inside', 1: 'in', 0: '', '-1': 'away', '-2': 'way outside' }[h];
+  if (!vert && !horiz) return 'down the middle';
+  return [vert, horiz].filter(Boolean).join(' and ');
 }
 
 // Movement of each pitch type as seen by the catcher: [arm-side or glove-side x, drop]
@@ -43,12 +59,12 @@ export function mountGame(root, ctx) {
   const [awayC, homeC] = teamColors(ctx.sc.teams[0].code, ctx.sc.teams[1].code);
   const C = {
     g, userSide: ctx.userSide,
-    ui: { ti: 0, cell: null, approach: 'normal', oneShot: null, pitchout: false, slideStep: false, tab: 'lineup', scouting: true },
+    ui: { ti: 0, cell: null, approach: 'normal', oneShot: null, look: null, pitchout: false, slideStep: false, tab: 'lineup', scouting: true },
     paKey: null, aiPlan: null, base: null, graded: false,
-    grades: [], wp: [], trace: [], lastGrade: null, gradeFresh: false, lastPlay: null, lastBall: null, moves: {},
+    grades: [], pitchGrades: [], wp: [], trace: [], noteGrade: null, notePitch: null, gradeFresh: false, lastPlay: null, lastBall: null, moves: {},
     startWp: null, done: false, fx: null, busy: false, skip: null,
     autoOn: false, autoTimer: null, manualPA: null, simPA: null, usedOneShot: false, paBases: '',
-    shownWp: null, wpHome: null, halfKey: null, intro: true, timers: [],
+    shownWp: null, wpHome: null, halfKey: null, timers: [], flip: null, nbKey: null, sheet: null,
   };
   const me = () => C.userSide;
   const myTeam = () => g.teams[me()];
@@ -58,6 +74,8 @@ export function mountGame(root, ctx) {
   const homeWp = () => { try { return winProb(g); } catch (e) { console.error(e); return null; } };
   const bump = (k) => { C.moves[k] = (C.moves[k] || 0) + 1; };
   const later = (fn, ms) => { const t = setTimeout(fn, ms); C.timers.push(t); return t; };
+  const typeName = (ti) => { const t = g.matchup().types[ti]; return t ? ((PITCH_TYPES[t.key] || {}).short || t.key) : 'pitch'; };
+  document.body.classList.add('in-game');
 
   // ------------------------------------------------------------ flow
   // Set up the next plate appearance: AI moves for either dugout, grading reset.
@@ -78,12 +96,15 @@ export function mountGame(root, ctx) {
       C.base = userBatting() ? { batter: g.batter().pid, runners: g.bases.map((r) => (r ? r.pid : null)) } : { pid: g.fld().pitcher };
       C.ui.oneShot = null;
       C.ui.cell = null;
+      C.ui.look = null;
       if (C.ui.approach !== 'takeUntilStrike') C.ui.approach = 'normal';
       C.ui.pitchout = false;
       C.ui.slideStep = false;
       C.usedOneShot = false;
       C.manualPA = null;
       C.paBases = basesKey();
+      C.noteGrade = null;
+      C.notePitch = null;
       try {
         const w = forSide(winProb(g), me());
         C.wp.push({ label: `${g.half ? 'B' : 'T'}${g.inning} ${g.outs} out`, wp: w });
@@ -109,16 +130,16 @@ export function mountGame(root, ctx) {
     const pitchEv = [...evs].reverse().find((e) => e.kind === 'pitch' && e.pitch && e.pitch.cell !== undefined);
     const go = () => {
       if (C.done && !g.over) return;
-      if (g.pending && g.pending.resolve) { show(snap); return sendPrompt(); }
+      if (g.pending && g.pending.resolve) { show(snap, opts); return sendPrompt(); }
       setupPA();
-      show(snap);
+      show(snap, opts);
       if (!g.over && g.pending && g.pending.kind === 'needPitcher' && g.pending.side === me()) bullpenSheet(true);
     };
     if (pitchEv && !opts.noBeat) beat(pitchEv, evs, !!opts.quick).then(go);
     else go();
   }
 
-  function show(snap) {
+  function show(snap, opts = {}) {
     const evs = g.log.slice(snap.logLen);
     const sameHalf = snap.half === g.half && snap.inning === g.inning;
     const ball = evs.filter((e) => e.kind === 'play' && e.prof).pop() || null;
@@ -129,6 +150,7 @@ export function mountGame(root, ctx) {
       if (p) C.lastPlay = p.kind === 'pitch' ? `${p.text}. ${p.count.b}-${p.count.s}.` : p.text;
     }
     const runs = g.score[snap.half] - snap.score[snap.half];
+    if (runs > 0) C.flip = snap.half;
     const moved = snap.bases.join() !== g.bases.map((r) => (r ? r.pid : null)).join();
     C.fx = null;
     if (sameHalf || g.over) {
@@ -141,6 +163,12 @@ export function mountGame(root, ctx) {
     }
     refreshWp();
     if (C.wpHome !== null) C.trace.push({ label: `${g.half ? 'B' : 'T'}${g.inning} ${g.outs} out, ${g.count.b}-${g.count.s}`, wp: forSide(C.wpHome, me()) });
+    // a sharp pitch call that still got burned
+    const pg = opts.pitchGrade;
+    if (pg && snap.wpHome !== null && C.wpHome !== null) {
+      const swing = forSide(C.wpHome, me()) - forSide(snap.wpHome, me());
+      if (pg.grade === 'green' && swing <= -0.03) C.notePitch = { grade: 'green', text: pg.side === 'def' ? 'Good pitch. He hit it anyway.' : 'Good sign. It didn\'t work out this time.' };
+    }
     render();
     const b = bannerFor(evs, snap);
     if (b) banner(b);
@@ -164,12 +192,14 @@ export function mountGame(root, ctx) {
     const won = g.winner === me();
     const result = {
       id: ctx.sc.id, won, score: [...g.score], side: me(), grades: C.grades.map((x) => x.grade),
-      gradeList: C.grades, wp: [{ label: 'Start', wp: C.startWp ?? 0.5 }, ...C.trace.slice(0, -1), { label: 'Final', wp: won ? 1 : 0 }],
+      gradeList: C.grades, pitchGrades: C.pitchGrades.map((x) => x.grade),
+      wp: [{ label: 'Start', wp: C.startWp ?? 0.5 }, ...C.trace.slice(0, -1), { label: 'Final', wp: won ? 1 : 0 }],
       startWp: C.startWp, moves: C.moves, mode: ctx.mode, day: ctx.day, log: g.log, innings: g.inning,
-      line: g.line, hits: g.hits, errors: g.errors, teams: g.teams.map((t) => t.nick),
+      line: g.line, hits: g.hits, errors: g.errors, teams: g.teams.map((t) => t.nick), seed: ctx.seed, start: ctx.startIdx,
     };
+    if (won) later(confetti, 250);
     later(() => sting(won), 500);
-    later(() => { stopCrowd(); ctx.onFinish(result); }, 2200);
+    later(() => { stopCrowd(); document.body.classList.remove('in-game'); ctx.onFinish(result); }, won ? 2900 : 2300);
   }
 
   // ------------------------------------------------------------ auto pace
@@ -177,7 +207,7 @@ export function mountGame(root, ctx) {
     if (g.over || g.pending || C.done || C.busy) return false;
     if (document.getElementById('sheet')) return false;
     if (C.simPA === paKeyNow()) return true;
-    if (settings().pitches === 'every') return false;
+    if (settings().pitches !== 'key') return false;
     if (!g.paStarted || C.manualPA === paKeyNow() || C.usedOneShot) return false;
     if (g.count.b === 3 || g.count.s === 2) return false;
     return basesKey() === C.paBases;
@@ -186,10 +216,10 @@ export function mountGame(root, ctx) {
     clearTimeout(C.autoTimer);
     const was = C.autoOn;
     C.autoOn = shouldAuto();
-    if (was !== C.autoOn) renderTicker();
+    if (was !== C.autoOn) renderStatus();
     if (!C.autoOn) { if (C.simPA && C.simPA !== paKeyNow()) C.simPA = null; return; }
     C.autoTimer = later(() => {
-      if (!shouldAuto()) { C.autoOn = false; renderTicker(); return; }
+      if (!shouldAuto()) { C.autoOn = false; renderStatus(); return; }
       if (userBatting()) doBat(true); else doPitch(true, true);
     }, C.simPA ? 220 : 420);
   }
@@ -204,7 +234,8 @@ export function mountGame(root, ctx) {
   function addGrade(kind, r, mine, best, why) {
     const entry = { kind, grade: r.grade, delta: r.delta, mine, best, why, inning: g.inning, half: g.half, mineWp: r.mine, bestWp: r.best.wp };
     C.grades.push(entry);
-    C.lastGrade = entry;
+    C.noteGrade = entry;
+    C.notePitch = null;
     C.gradeFresh = true;
   }
   function describeDef(opt) {
@@ -251,18 +282,75 @@ export function mountGame(root, ctx) {
     } catch (e) { console.error(e); }
   }
 
+  // One pitch call against the best pitch that could have been called.
+  function gradeMyPitch(useCatcher) {
+    try {
+      const O = pitchOutcomes(g);
+      if (!O) return null;
+      const M = O.M, count = `${g.count.b}-${g.count.s}`, fs = 1 - g.half;
+      const row = (ti, t) => Array.from({ length: 25 }, (_, a) => M.scatter[ti][t * 25 + a]);
+      let best = -1, bestKey = [0, 12];
+      M.types.forEach((_, ti) => {
+        for (let t = 0; t < 25; t++) {
+          const v = forSide(pitchValue(O, [[1, ti, row(ti, t)]], count, 'normal', null, g.seq), fs);
+          if (v > best) { best = v; bestKey = [ti, t]; }
+        }
+      });
+      const mine = useCatcher
+        ? forSide(pitchValue(O, M.autoActual(count).map((x, ti) => [x.p, ti, x.actual]), count, 'normal', null, g.seq), fs)
+        : forSide(pitchValue(O, [[1, C.ui.ti, row(C.ui.ti, C.ui.cell)]], count, 'normal', null, g.seq), fs);
+      const delta = Math.max(0, best - mine);
+      return { grade: pitchGradeOf(delta), delta, side: 'def', mine: useCatcher ? "the catcher's call" : `${typeName(C.ui.ti)} ${spotWords(C.ui.cell)}`, best: `${typeName(bestKey[0])} ${spotWords(bestKey[1])}` };
+    } catch (e) { console.error(e); return null; }
+  }
+  const signWords = (ap, lk) => `${APPROACH[ap] || 'Swing away'}${lk !== null && lk !== undefined ? `, looking ${spotWords(lk)}` : ''}`;
+  // The hitter's sign for one pitch against the best sign for it.
+  function gradeMySign() {
+    if (C.ui.oneShot) return null;
+    try {
+      const O = pitchOutcomes(g);
+      if (!O) return null;
+      const M = O.M, count = `${g.count.b}-${g.count.s}`, bs = g.half;
+      const mix = M.autoActual(count).map((x, ti) => [x.p, ti, x.actual]);
+      let best = -1, bestKey = ['normal', null];
+      for (const ap of ['normal', 'take', 'sitFB', 'protect']) {
+        for (const lk of ap === 'take' ? [null] : LOOKS) {
+          const v = forSide(pitchValue(O, mix, count, ap, lk, g.seq), bs);
+          if (v > best) { best = v; bestKey = [ap, lk]; }
+        }
+      }
+      const ap = C.ui.approach === 'takeUntilStrike' ? (g.count.s === 0 ? 'take' : 'normal') : C.ui.approach;
+      const lk = ap === 'take' ? null : C.ui.look;
+      const mine = forSide(pitchValue(O, mix, count, ap, lk, g.seq), bs);
+      const delta = Math.max(0, best - mine);
+      return { grade: pitchGradeOf(delta), delta, side: 'off', mine: signWords(ap, lk), best: signWords(bestKey[0], bestKey[1]) };
+    } catch (e) { console.error(e); return null; }
+  }
+  function keepPitchGrade(pg, before) {
+    if (!pg) return;
+    C.pitchGrades.push(pg);
+    const ev = g.log.slice(before).filter((e) => e.kind === 'pitch' && e.pitch).pop();
+    if (ev) ev.grade = pg.grade;
+    if (pg.grade === 'orange' || pg.grade === 'red') {
+      C.notePitch = { grade: pg.grade, text: `${pg.side === 'def' ? 'Costly pitch call' : 'Costly sign'}: ${pg.mine}. Better: ${pg.best} (+${(pg.delta * 100).toFixed(1)} pts).` };
+    }
+  }
+
   // ------------------------------------------------------------ actions
   function doPitch(auto, quick) {
     if (g.pending || g.over || C.busy) return;
     if (!C.graded) gradeDef(false);
     if (!quick && C.tip && C.tip.key === 'call') { markSeen('call'); C.tip = null; }
+    const useCatcher = auto || C.ui.cell === null;
+    const pg = quick ? null : gradeMyPitch(useCatcher);
     const snap = takeSnap();
     const sign = aiSign(g, C.aiPlan);
-    const call = auto || C.ui.cell === null ? null : { ti: C.ui.ti, target: C.ui.cell };
+    const call = useCatcher ? null : { ti: C.ui.ti, target: C.ui.cell };
     if (C.ui.pitchout) C.usedOneShot = true;
     g.pitch({ call, sign, defense: { pitchout: C.ui.pitchout, slideStep: C.ui.slideStep } });
     C.ui.pitchout = false;
-    settle(snap, { quick });
+    keepPitchGrade(pg, snap.logLen);
+    settle(snap, { quick, pitchGrade: pg });
   }
   function buildSign() {
     const sign = { approach: C.ui.approach === 'takeUntilStrike' ? (g.count.s === 0 ? 'take' : 'normal') : C.ui.approach };
@@ -274,6 +362,7 @@ export function mountGame(root, ctx) {
     if (o === 'double') sign.steal = 'double';
     if (o === 'hitrun') sign.hitRun = true;
     if (o === 'runhit') { sign.runHit = true; sign.steal = 2; }
+    if (C.ui.look !== null && sign.approach !== 'take') sign.look = C.ui.look;
     return sign;
   }
   function doBat(quick) {
@@ -285,16 +374,14 @@ export function mountGame(root, ctx) {
       bump(o === 'sac' || o === 'drag' ? 'bunt' : o === 'squeeze' || o === 'safety' ? 'squeeze' : o === 'hitrun' || o === 'runhit' ? 'hitrun' : 'steal');
       C.usedOneShot = true;
     }
+    const pg = quick ? null : gradeMySign();
     const snap = takeSnap();
     g.pitch({ call: null, sign: buildSign(), defense: aiDefensePitch(g) });
     C.ui.oneShot = null;
     if (C.ui.approach === 'take') C.ui.approach = 'normal';
     if (C.ui.approach === 'takeUntilStrike' && g.count.s > 0) C.ui.approach = 'normal';
-    settle(snap, { quick });
-  }
-  function mainAction() {
-    if (userBatting()) doBat(false);
-    else doPitch(false, false);
+    keepPitchGrade(pg, snap.logLen);
+    settle(snap, { quick, pitchGrade: pg });
   }
   function simAtBat() {
     C.simPA = paKeyNow();
@@ -349,7 +436,7 @@ export function mountGame(root, ctx) {
   function beat(pitchEv, evs, quick) {
     const zone = root.querySelector('.zone');
     const p = pitchEv.pitch;
-    const cellEl = zone && zone.querySelector(`[data-cell="${p.cell}"]`);
+    const cellEl = zone && zone.querySelector(`[data-cell="${p.cell}"], [data-look="${p.cell}"]`);
     if (!cellEl) return Promise.resolve();
     const [word, cls] = stampFor(pitchEv, evs);
     const idx = g.log.indexOf(pitchEv);
@@ -369,6 +456,7 @@ export function mountGame(root, ctx) {
       const [bx, by, ms] = BREAK[p.type] || BREAK.FF;
       const fly = reducedMotion() ? 0 : Math.round(ms * (quick ? 0.5 : 1));
       if (fly) {
+        pitchFlight(root.querySelector('.g-field > svg'), fly);
         const ball = document.createElement('i');
         ball.className = 'ball-fx';
         zone.appendChild(ball);
@@ -387,13 +475,15 @@ export function mountGame(root, ctx) {
         }
         timers.push(setTimeout(() => ball.remove(), fly + 120));
       }
+      const swung = p.result === 'swinging' || p.result === 'foul' || p.result === 'inplay';
+      if (swung && !reducedMotion()) timers.push(setTimeout(() => { const s = root.querySelector('.sil'); if (s) s.classList.add('swing'); }, Math.max(0, fly - 110)));
       timers.push(setTimeout(() => {
         if (cls === 'inplay') crack(/HR|B2|B3/.test((evs.find((e) => e.kind === 'play' && e.category) || {}).category || ''));
         else if (cls === 'foul') crack(false);
         else pop(cls === 'ball' ? 0.55 : 1);
         const dot = document.createElement('span');
         dot.className = `pd new ${RESULT_CLASS[p.result] || 'inplay'}`;
-        dot.textContent = n;
+        dot.innerHTML = `${n}${pitchEv.grade ? `<i class="${pitchEv.grade}">${GRADE_LETTER[pitchEv.grade]}</i>` : ''}`;
         cellEl.appendChild(dot);
         const st = document.createElement('div');
         st.className = `stamp ${cls}`;
@@ -411,7 +501,7 @@ export function mountGame(root, ctx) {
     if (evs.some((e) => e.kind === 'walkoff')) return { text: 'Walk-off!', sub: `${nick(1)} win`, good: good(1), big: true };
     const runs = g.score[bat] - snap.score[bat];
     const hr = evs.find((e) => e.kind === 'play' && e.category === 'HR');
-    if (g.over) return { text: 'Ballgame', sub: `${nick(g.winner)} win`, good: good(g.winner), big: true };
+    if (g.over) return { text: g.winner === me() ? 'You win!' : 'Ballgame', sub: `${nick(g.winner)} win`, good: good(g.winner), big: true, win: g.winner === me() };
     if (hr) return { text: runs >= 4 ? 'Grand slam!' : 'Home run!', sub: runs > 1 ? `${runs} runs score` : 'Solo shot', good: good(bat), big: true };
     if (runs > 0) {
       const before = snap.score[bat] - snap.score[1 - bat], after = g.score[bat] - g.score[1 - bat];
@@ -438,10 +528,26 @@ export function mountGame(root, ctx) {
   function banner(b) {
     document.querySelectorAll('.fx-banner').forEach((el) => el.remove());
     const el = document.createElement('div');
-    el.className = `fx-banner ${b.good ? 'good' : 'bad'} ${b.big ? 'big' : ''} ${b.quiet ? 'quiet' : ''}`;
+    el.className = `fx-banner ${b.good ? 'good' : 'bad'} ${b.big ? 'big' : ''} ${b.quiet ? 'quiet' : ''} ${b.win ? 'win' : ''}`;
     el.innerHTML = `${esc(b.text)}${b.sub ? `<small>${esc(b.sub)}</small>` : ''}`;
     document.body.appendChild(el);
-    later(() => el.remove(), 2000);
+    later(() => el.remove(), b.win ? 2700 : 2000);
+  }
+  function confetti() {
+    if (reducedMotion()) return;
+    const el = document.createElement('div');
+    el.className = 'confetti';
+    const colors = ['#fff1cf', 'var(--away)', 'var(--home)', '#ffd27a', '#ffffff'];
+    let html = '';
+    for (let i = 0; i < 70; i++) {
+      const left = Math.random() * 100, dur = 1.6 + Math.random() * 1.6, delay = Math.random() * 0.6;
+      html += `<i style="left:${left.toFixed(1)}%;background:${colors[i % colors.length]};animation-duration:${dur.toFixed(2)}s;animation-delay:${delay.toFixed(2)}s;--dx:${((Math.random() - 0.5) * 160).toFixed(0)}px;--rot:${(360 + Math.random() * 720).toFixed(0)}deg"></i>`;
+    }
+    el.innerHTML = html;
+    el.style.setProperty('--away', awayC);
+    el.style.setProperty('--home', homeC);
+    document.body.appendChild(el);
+    later(() => el.remove(), 3800);
   }
   function coldOpen() {
     const sc = ctx.sc;
@@ -452,15 +558,33 @@ export function mountGame(root, ctx) {
     const intro = first ? first[0].trim() : String(sc.intro || '');
     el.innerHTML = `<div class="co-in"><div class="eyebrow">${esc(sc.event)}${sc.park ? ' · ' + esc(sc.park) : ''}</div>
       <h2>${esc(sc.title)}</h2><p>${esc(intro)}</p>
-      <p class="goal"><span>Your goal</span>${esc(mi.head)}. ${esc(mi.sub)}.</p>
+      <p class="goal"><span>Your goal · you manage the ${esc(myTeam().nick)}</span>${esc(mi.head)}. ${esc(mi.sub)}.</p>
       <button class="btn primary" data-co>Play ball</button></div>`;
     document.body.appendChild(el);
     const close = () => { el.classList.add('out'); later(() => el.remove(), 350); unlock(); setCrowd(pressure()); };
     el.addEventListener('click', close);
-    later(() => { if (document.body.contains(el)) close(); }, 6500);
+    later(() => { if (document.body.contains(el)) close(); }, 7000);
   }
 
   // ------------------------------------------------------------ sheets
+  // Our own sheets (menu, manager, plays, ...) share the game's click handling
+  // and redraw themselves when something in them changes.
+  function gameSheet(kind, title, html) {
+    C.sheet = kind;
+    openSheet(title, html, (el) => {
+      el.dataset.kind = kind;
+      el.addEventListener('click', onAction);
+    });
+  }
+  function refreshSheet() {
+    const el = document.getElementById('sheet');
+    if (!el || !el.dataset.kind) return;
+    const k = el.dataset.kind;
+    if (k === 'manager') managerSheet();
+    else if (k === 'plays') playsSheet();
+    else if (k === 'menu') menuSheet();
+    else if (k === 'lineups') lineupSheet();
+  }
   function bullpenSheet(forced) {
     const t = g.teams[me()];
     const fielding = g.half !== me();
@@ -488,6 +612,7 @@ export function mountGame(root, ctx) {
       : !fielding ? '<p class="muted">Your team is batting. Get someone warm now so he is ready when you take the field.</p>'
         : can.ok ? '<p class="muted">A reliever who warms up first is sharper than one rushed in cold. OBP is how often this hitter would reach base against him.</p>'
           : `<p class="muted">${esc(can.reason)}</p>`;
+    C.sheet = 'bullpen';
     openSheet(forced ? 'Bring in a pitcher' : 'Bullpen', note + rows, (el) => {
       el.addEventListener('click', (e) => {
         const wb = e.target.closest('[data-warm]');
@@ -525,7 +650,8 @@ export function mountGame(root, ctx) {
     }).join('') || '<p class="muted">Nobody left on the bench.</p>';
     const note = batting ? (g.paStarted ? '<p class="muted">Pinch hitters come in before the first pitch of an at-bat. You can still send in a pinch runner.</p>'
       : `<p class="muted">${esc(g.P(g.batter().pid).n)} is due up. Anyone you take out can't come back. Speed matters for pinch runners: it decides steals and scoring from second.</p>`)
-      : '<p class="muted">Use the Defense button to make defensive changes.</p>';
+      : '<p class="muted">Use Defense in the Manager menu to make defensive changes.</p>';
+    C.sheet = 'bench';
     openSheet('Bench', note + rows, (el) => {
       el.addEventListener('click', (e) => {
         const ph = e.target.closest('[data-ph]');
@@ -561,6 +687,7 @@ export function mountGame(root, ctx) {
           ${options ? `<select aria-label="Replace ${esc(pl.n)}" data-repl="${i}"><option value="">Replace with…</option>${options}</select>` : ''}
           <select aria-label="Move ${esc(pl.n)}" data-move="${i}">${posOpts}</select></div></div>`;
     }).join('');
+    C.sheet = 'defense';
     openSheet('Defense', `<p class="muted">Ratings are 20-80, from his fielding that season (50 is average). Players who never played a position rate poorly there.</p>${rows}`, (el) => {
       el.addEventListener('change', (e) => {
         const rep = e.target.closest('[data-repl]');
@@ -575,6 +702,68 @@ export function mountGame(root, ctx) {
       });
     });
   }
+  function managerSheet() {
+    if (g.over || userBatting()) return;
+    const ft = g.fld();
+    const coach = coachOn();
+    const b = g.P(g.batter().pid);
+    const al = ft.align;
+    const chip = (grp, val, label, dis = false) => `<button class="chip" data-align="${grp}:${val}" aria-pressed="${(grp === 'inf' ? al.inf : grp === 'of' ? al.of : String(!!al.shift)) === val}" ${dis ? 'disabled' : ''}>${label}${coach && DEF_HELP[`${grp}:${val}`] ? `<small>${DEF_HELP[`${grp}:${val}`]}</small>` : ''}</button>`;
+    const pick = g.bases.map((r, i) => (r ? `<button class="btn small" data-pickoff="${i + 1}">Throw to ${['1st', '2nd', '3rd'][i]}</button>` : '')).join('');
+    gameSheet('manager', 'Manager', `
+      <div class="group"><div class="eyebrow">Infield</div>
+      <div class="chips">${chip('inf', 'normal', 'Normal')}${chip('inf', 'in', 'Drawn in')}${chip('inf', 'dp', 'Double-play depth')}${chip('inf', 'corners', 'Corners in')}${chip('inf', 'lines', 'Guard the lines')}</div></div>
+      <div class="group"><div class="eyebrow">Outfield</div>
+      <div class="chips">${chip('of', 'normal', 'Normal')}${chip('of', 'deep', 'No doubles')}${chip('of', 'shallow', 'Shallow')}${g.rules.shift ? chip('shift', 'true', 'Shift', b.b === 'R') : ''}</div></div>
+      ${g.bases.some(Boolean) ? `<div class="group"><div class="eyebrow">Runners</div><div class="chips">
+        <button class="chip" data-toggle="pitchout" aria-pressed="${C.ui.pitchout}">Pitchout${coach ? '<small>Throw wide so the catcher can gun down a runner. A sure ball.</small>' : ''}</button>
+        <button class="chip" data-toggle="slideStep" aria-pressed="${C.ui.slideStep}">Slide step${coach ? '<small>Quicker to the plate, a bit less control.</small>' : ''}</button></div>
+        ${pick ? `<div class="actions">${pick}</div>` : ''}</div>` : ''}
+      ${runnersHtml()}
+      <div class="actions">
+        <button class="btn" data-act="ibb">Intentional walk</button>
+        <button class="btn" data-act="visit">Mound visit</button>
+        <button class="btn" data-act="bullpen">Bullpen</button>
+        <button class="btn" data-act="defense">Defense</button>
+      </div>`);
+  }
+  function playsSheet() {
+    if (g.over || !userBatting()) return;
+    const b = g.bases;
+    const s = g.count.s;
+    const coach = coachOn();
+    const help = (k) => (coach && SIGN_HELP[k] ? `<small>${SIGN_HELP[k]}</small>` : '');
+    const ap = (val, label) => `<button class="chip" data-approach="${val}" aria-pressed="${C.ui.approach === val}">${label}${help(val)}</button>`;
+    const odds = (base) => { const p = stealOdds(g, base); return p === null ? '' : `<span class="odds">${pct(p)}</span>`; };
+    const os = (val, label, ok, extra = '') => `<button class="chip" data-oneshot="${val}" aria-pressed="${C.ui.oneShot === val}" ${ok ? '' : 'disabled'}>${label}${ok ? extra : ''}${help(val)}</button>`;
+    gameSheet('plays', 'Signs', `
+      <div class="group"><div class="eyebrow">Approach · ${g.count.b}-${g.count.s}, ${esc(countTalk(g.count).toLowerCase())}</div><div class="chips">
+        ${ap('normal', 'Swing away')}${ap('take', 'Take this pitch')}${ap('takeUntilStrike', 'Take until a strike')}${ap('sitFB', 'Sit on the fastball')}${ap('protect', 'Protect the plate')}</div></div>
+      <div class="group"><div class="eyebrow">Bunt</div><div class="chips">
+        ${os('sac', 'Sacrifice', g.outs < 2 && (b[0] || b[1]))}${os('drag', 'Bunt for a hit', true)}${os('squeeze', 'Suicide squeeze', g.outs < 2 && b[2])}${os('safety', 'Safety squeeze', g.outs < 2 && b[2])}</div></div>
+      <div class="group"><div class="eyebrow">Run</div><div class="chips">
+        ${os('steal2', 'Steal 2nd', b[0] && !b[1], odds(2))}${os('steal3', 'Steal 3rd', b[1] && !b[2], odds(3))}${os('steal4', 'Steal home', b[2], odds(4))}${os('double', 'Double steal', b[0] && b[1] && !b[2])}${os('hitrun', 'Hit and run', b[0] && !b[1] && g.outs < 2 && s < 2)}${os('runhit', 'Run and hit', b[0] && !b[1])}</div></div>
+      ${runnersHtml()}
+      <div class="actions"><button class="btn primary" data-act="bat" data-close>Next pitch</button><button class="btn" data-act="bullpen">Bullpen</button></div>`);
+  }
+  function menuSheet() {
+    const sw = (act, on, label, sub) => `<button data-act="${act}" aria-pressed="${on}"><span>${label}<small>${sub}</small></span><span class="sw"></span></button>`;
+    const go = (act, label, sub) => `<button data-act="${act}"><span>${label}<small>${sub}</small></span><span aria-hidden="true">›</span></button>`;
+    gameSheet('menu', esc(ctx.sc.title), `<p class="muted" style="margin:0">${esc(ctx.sc.event)} · you manage the ${esc(myTeam().nick)}</p>
+      <div class="menu-list">
+        ${sw('coach', coachOn(), 'Coach', 'Plain-English tips for new managers')}
+        ${sw('auto', settings().pitches === 'key', 'Auto-play routine pitches', 'The game stops you only for the big ones')}
+        ${sw('sound', soundOn(), 'Sound', 'Crowd, bat, mitt and organ')}
+        ${go('box', 'Box score', 'The full line score')}
+        ${go('log', 'Play-by-play', 'Every pitch and play so far')}
+        ${go('lineups', 'Lineups', 'Both lineups, your bench and bullpen')}
+        ${go('help', 'How to play', 'The rules of the game')}
+        ${go('quit', 'Leave game', 'Back to the game page')}
+      </div>`);
+  }
+  function lineupSheet() { gameSheet('lineups', 'Lineups', rosterTab()); }
+  function logSheet() { gameSheet('log', 'Play-by-play', logHtml()); }
+  function boxSheet() { gameSheet('box', 'Box score', scoreboard()); }
 
   // ------------------------------------------------------------ render pieces
   function pressure() {
@@ -584,17 +773,16 @@ export function mountGame(root, ctx) {
     return Math.max(0, Math.min(1, 0.65 * close + (k.tying || k.ahead ? 0.35 : 0)));
   }
 
-  function head() {
-    const every = settings().pitches === 'every';
-    return `<div class="g-head"><div><div class="eyebrow">${esc(ctx.sc.event)} · You manage the ${esc(myTeam().nick)}</div>
-        <h2>${esc(ctx.sc.title)}</h2></div>
-      <div class="g-tools">
-        <button class="tool" data-act="coach" aria-pressed="${coachOn()}" title="Plain-English help under every button">Coach</button>
-        <button class="tool" data-act="every" aria-pressed="${every}" title="Call every pitch yourself instead of only the big ones">Every pitch</button>
-        <button class="tool wide" data-act="sound" aria-pressed="${soundOn()}" title="Ballpark sound">Sound</button>
-        <button class="tool wide" data-act="help">Help</button>
-        <button class="tool" data-act="quit">Leave</button>
-      </div></div>`;
+  function topBar(w) {
+    const from = C.shownWp === null ? w : C.shownWp;
+    const tm = (s) => `<span class="g-tm ${s === me() ? 'me' : ''}"><i style="background:${s === 0 ? 'var(--away)' : 'var(--home)'}"></i><span class="nk">${esc(g.teams[s].nick)}</span><span class="ab">${esc(teamAbbr(g.teams[s].code))}</span><b class="${C.flip === s ? 'flip' : ''}">${g.score[s]}</b></span>`;
+    return `<header class="g-top">
+        <button class="g-icon" data-act="quit" aria-label="Leave game" title="Leave game">✕</button>
+        <div class="g-score">${tm(0)}${tm(1)}<span class="g-inn">${g.over ? 'Final' : `${g.half ? '▼' : '▲'}${g.inning}`}</span></div>
+        <div class="g-wp"><small>${esc(myTeam().nick)} win</small><b class="num">${w === null ? '—' : pct(w)}</b></div>
+        <button class="g-icon" data-act="menu" aria-label="Menu" title="Menu">☰</button>
+      </header>
+      <div class="g-line" aria-hidden="true"><u></u><i data-to="${w === null ? 0 : (w * 100).toFixed(1)}" style="width:${from === null ? 0 : (from * 100).toFixed(1)}%"></i></div>`;
   }
 
   function scoreboard() {
@@ -611,86 +799,80 @@ export function mountGame(root, ctx) {
       return `<tr><td class="name ${side === me() ? 'me' : ''}"><i style="background:${side === 0 ? 'var(--away)' : 'var(--home)'}"></i>${esc(t.nick)}${side === g.half && !g.over ? '<span class="up" title="At bat"></span>' : ''}</td>${cells}
         <td class="gap"></td><td class="rhe">${g.score[side]}</td><td class="rhe">${g.hits[side]}</td><td class="rhe">${g.errors[side]}</td></tr>`;
     };
-    const bulbs = (k, on) => Array.from({ length: k }, (_, i) => `<span class="bulb ${i < on ? 'on' : ''}"></span>`).join('');
     return `<div class="board">
       <div class="board-scroll"><table aria-label="Line score">
         <thead><tr><th></th>${cols.map((i) => `<th class="${i <= n - 3 ? 'early' : ''}">${i}</th>`).join('')}<th class="gap"></th><th>R</th><th>H</th><th>E</th></tr></thead>
-        <tbody>${row(0)}${row(1)}</tbody></table></div>
-      <div class="status">
-        <span class="inning-tag">${g.half ? '▼' : '▲'} ${ordinal(g.inning)}</span>
-        <div class="bso" aria-label="Count ${g.count.b} balls ${g.count.s} strikes, ${g.outs} out">
-          <div>B ${bulbs(3, g.count.b)}</div><div>S ${bulbs(2, g.count.s)}</div><div>O ${bulbs(2, g.outs)}</div></div>
-        <span class="count-talk">${g.over ? 'Final' : esc(countTalk(g.count))}</span>
-      </div></div>`;
+        <tbody>${row(0)}${row(1)}</tbody></table></div></div>`;
   }
 
-  // Phones: a slim bar that sticks to the top once the scoreboard scrolls away.
-  function bug(w) {
-    const outs = Array.from({ length: 2 }, (_, i) => `<span class="bulb ${i < g.outs ? 'on' : ''}"></span>`).join('');
-    const team = (s) => `<span class="b-team"><i style="background:${s === 0 ? 'var(--away)' : 'var(--home)'}"></i>${esc(g.teams[s].nick)} <b>${g.score[s]}</b></span>`;
-    return `<div class="bug" aria-hidden="true"><span class="b-inn">${g.half ? '▼' : '▲'}${g.inning}</span>${team(0)}${team(1)}
-      <span class="b-count">${g.count.b}-${g.count.s}</span><span class="b-outs">${outs}</span><span class="b-wp">${w === null ? '' : pct(w)}</span></div>`;
+  function noteHtml() {
+    if (g.over) return '';
+    const np = C.notePitch;
+    if (np) return `<div class="g-ov g-note fresh"><span class="sq ${np.grade}">${GRADE_LETTER[np.grade]}</span><span>${esc(np.text)}</span><button class="x" data-act="hidenote" aria-label="Hide">×</button></div>`;
+    const x = C.noteGrade;
+    if (x) {
+      const fresh = C.gradeFresh;
+      C.gradeFresh = false;
+      const tail = x.grade === 'green' ? '' : ` Best: ${esc(x.best)} (+${(x.delta * 100).toFixed(1)} pts).`;
+      return `<div class="g-ov g-note ${fresh ? 'fresh' : ''}"><span class="sq ${x.grade}">${GRADE_LETTER[x.grade]}</span><span><b class="grade-word ${x.grade}">${GRADE_WORD[x.grade]}.</b> ${esc(x.mine)}.${tail}${x.why ? `<span class="why">${esc(x.why)}</span>` : ''}</span><button class="x" data-act="hidenote" aria-label="Hide">×</button></div>`;
+    }
+    if (coachOn() && C.tip) return `<div class="g-ov g-note"><span class="who">Coach</span><span>${esc(C.tip.text)}</span><button class="x" data-tip="${C.tip.key}" aria-label="Got it">×</button></div>`;
+    return '';
   }
 
-  function missionBar(w) {
+  function nowBatting() {
+    if (g.over || g.paStarted || C.nbKey === paKeyNow() || C.noteGrade || C.notePitch || (coachOn() && C.tip)) return '';
+    C.nbKey = paKeyNow();
+    const b = g.P(g.batter().pid);
+    const line = g.lines[g.batter().pid];
+    const today = line ? `${line[2]}-for-${line[1]} today` : 'first time up today';
+    return `<div class="g-ov g-nowbat" style="--tc:${g.half === 0 ? 'var(--away)' : 'var(--home)'}"><small>Now batting · ${esc(g.teams[g.half].nick)}</small><b>${esc(b.n)}</b><span>${b.bl ? `${avg3(b.bl[0])}, ${b.bl[3]} HR · ` : ''}${today}</span></div>`;
+  }
+
+  function fieldPane(fx, kr) {
     const mi = mission(g, me());
     const tags = g.over ? [] : runTags(g);
-    const from = C.shownWp === null ? w : C.shownWp;
-    const d = w !== null && from !== null ? w - from : 0;
-    const pts = C.trace.length > 1 ? C.trace : null;
-    let spark = '';
-    if (pts) {
-      const n = pts.length;
-      const xy = pts.map((p, i) => `${((i / (n - 1)) * 300).toFixed(1)},${(26 - p.wp * 24).toFixed(1)}`);
-      spark = `<svg class="spark" viewBox="0 0 300 28" preserveAspectRatio="none" aria-hidden="true">
-        <line x1="0" x2="300" y1="14" y2="14" stroke="rgba(255,255,255,.12)" stroke-dasharray="3 4"/>
-        <polyline points="${xy.join(' ')}" fill="none" stroke="var(--mine)" stroke-width="1.6" vector-effect="non-scaling-stroke" stroke-linejoin="round"/></svg>`;
-    }
-    return `<div class="mission">
-      <div class="m-main"><div class="m-head">${esc(mi.head)}</div><div class="m-sub">${esc(mi.sub)}</div>
-        ${tags.length ? `<div class="m-tags">${tags.map((t) => `<span>${esc(t)}</span>`).join('')}</div>` : ''}</div>
-      <div class="m-wp"><div class="top"><span class="lab">${esc(myTeam().nick)}<br>chance to win</span>
-          ${Math.abs(d) >= 0.005 ? `<i class="delta ${d > 0 ? 'up' : 'down'} flash">${d > 0 ? '+' : '−'}${Math.abs(d * 100).toFixed(0)}</i>` : ''}
-          <b class="num">${w === null ? '—' : pct(w)}</b></div>
-        <div class="wpbar"><u></u><i data-to="${w === null ? 0 : (w * 100).toFixed(1)}" style="width:${from === null ? 0 : (from * 100).toFixed(1)}%"></i></div>
-        ${spark}</div></div>`;
+    const bulbs = (k, on) => Array.from({ length: k }, (_, i) => `<span class="bulb ${i < on ? 'on' : ''}"></span>`).join('');
+    const occ = ['first', 'second', 'third'].filter((_, i) => g.bases[i]);
+    const sit = `${g.half ? 'Bottom' : 'Top'} of the ${ordinal(g.inning)}, ${g.outs} out, ${occ.length === 3 ? 'bases loaded' : occ.length ? 'runner' + (occ.length > 1 ? 's' : '') + ' on ' + occ.join(' and ') : 'nobody on'}.`;
+    return `<section class="g-field">${renderField(g, C.lastBall, fx, kr)}<div class="vignette"></div>
+      <div class="g-ov g-mission"><b>${esc(mi.head)}</b><span>${esc([mi.sub, ...tags].filter(Boolean).join(' · '))}</span></div>
+      <div class="g-ov g-bso" aria-label="Count ${g.count.b} balls ${g.count.s} strikes, ${g.outs} out">
+        <div><span>B</span>${bulbs(3, g.count.b)}</div><div><span>S</span>${bulbs(2, g.count.s)}</div><div><span>O</span>${bulbs(2, g.outs)}</div>
+        <em>${g.over ? 'Final' : esc(countTalk(g.count))}</em></div>
+      ${nowBatting()}${noteHtml()}
+      <div class="g-caption" aria-live="polite">${esc(C.lastPlay || sit)}</div>
+    </section>`;
   }
 
-  function vsRow() {
+  function matchLine() {
     const b = g.P(g.batter().pid), p = g.pitcherObj();
-    const gr = batterGrades(b, g.lg);
     const line = g.lines[g.batter().pid];
-    const today = line ? `${line[2]}-for-${line[1]} today` : 'first time up';
-    const bl = b.bl;
+    const today = line ? `${line[2]}-for-${line[1]}` : '1st AB';
     const ft = g.fld();
     const ps = ft.pst[ft.pitcher] || { pitches: 0, bf: 0 };
     const tired = g.pitcherTired(ft);
     const pl = p.p ? p.p.pl : null;
     const side = battingSide(b.b, p.t);
-    return `<div class="vsrow">
-      <div class="who"><div class="eyebrow">At bat · ${esc(g.teams[g.half].nick)}</div><div class="nm">${esc(b.n)}</div>
-        <div class="ln">${b.b === 'B' ? `Switch-hitter, batting ${side === 'L' ? 'left' : 'right'}` : `Bats ${b.b === 'L' ? 'left' : 'right'}`} · ${bl ? `${avg3(bl[0])}, ${bl[3]} HR` : 'no season line'} · ${today}</div>
-        <div class="grades"><div><b>${gr.contact}</b><span>Contact</span></div><div><b>${gr.power}</b><span>Power</span></div><div><b>${gr.eye}</b><span>Eye</span></div><div><b>${gr.speed}</b><span>Speed</span></div></div></div>
+    const hand = b.b === 'B' ? `S (${side})` : side;
+    return `<div class="g-match">
+      <div class="who"><div class="nm">${esc(b.n)}</div><div class="ln">Bats ${hand} · ${b.bl ? `${avg3(b.bl[0])}, ${b.bl[3]} HR` : '—'} · ${today} · ${speedBadge(b.spd)}</div></div>
       <div class="vs">vs</div>
-      <div class="who right"><div class="eyebrow">Pitching · ${esc(ft.nick)}</div><div class="nm">${esc(p.n)}</div>
-        <div class="ln">${p.t === 'L' ? 'Lefty' : 'Righty'} · ${pl ? `${pl[2].toFixed(2)} ERA` : ''} · ${Math.round(ps.pitches)} pitches${ps.est ? ' (est.)' : ''}</div>
-        <div class="meter" title="Fatigue"><i style="width:${Math.round((1 - tired) * 100)}%;background:${tired > 0.6 ? 'var(--g-red)' : tired > 0.3 ? 'var(--g-orange)' : 'var(--g-green)'}"></i></div>
-        <div class="ln">${tired > 0.6 ? 'Running on fumes' : tired > 0.3 ? 'Tiring' : 'Strong'}</div></div></div>`;
+      <div class="who right"><div class="nm">${esc(p.n)}</div><div class="ln">${p.t}HP · ${pl ? `${pl[2].toFixed(2)} ERA · ` : ''}${Math.round(ps.pitches)} pitches</div>
+        <div class="meter" title="Fatigue"><i style="width:${Math.round((1 - tired) * 100)}%;background:${tired > 0.6 ? 'var(--g-red)' : tired > 0.3 ? 'var(--g-orange)' : 'var(--g-green)'}"></i></div></div></div>`;
   }
 
-  function tickerText() {
+  function statusText() {
     if (g.over) return '';
     const fielding = !userBatting();
-    if (C.autoOn) return `<span class="live"></span>${C.simPA ? 'Simming the at-bat' : fielding ? "Catcher's calling the routine pitches" : 'Swinging away until a big pitch'}. <button class="linkbtn" data-act="takeover">Take over</button>`;
-    const pp = paPitches();
-    if (!g.paStarted) return fielding ? 'New batter. Make your moves, then call the first pitch.' : 'New batter. Pinch-hit now, or give the first sign.';
-    const lastP = pp[pp.length - 1];
+    if (C.autoOn) return `<span class="live"></span> ${C.simPA ? 'Simming the at-bat' : fielding ? "Catcher's calling the routine pitches" : 'Swinging away until a big pitch'}. <button class="linkbtn" data-act="takeover">Take over</button>`;
+    if (!g.paStarted) return fielding ? 'New batter. Call the first pitch.' : 'New batter. Give the first sign.';
     const big = g.count.b === 3 || g.count.s === 2;
-    return `${lastP ? `Pitch ${pp.length}: ${esc(lastP.text)}. ` : ''}<b>${g.count.b}-${g.count.s}</b>${big ? ' · Big pitch: your call.' : settings().pitches === 'every' ? '' : ' · Your call.'}`;
+    return `<b>${g.count.b}-${g.count.s}</b> ${big ? 'Big pitch' : esc(countTalk(g.count))}`;
   }
-  function renderTicker() {
-    const el = root.querySelector('.ticker');
-    if (el) el.innerHTML = tickerText();
+  function renderStatus() {
+    const el = root.querySelector('.g-stat');
+    if (el) el.innerHTML = statusText();
   }
 
   function plateView(interactive) {
@@ -699,6 +881,15 @@ export function mountGame(root, ctx) {
     const zm = interactive ? zoneMap(b) : null;
     const pp = paPitches();
     const perCell = {};
+    // where this pitcher tends to throw in this count, for the hitter's look
+    let tend = null;
+    if (!interactive && C.ui.scouting && !g.over) {
+      try {
+        tend = new Float64Array(25);
+        for (const { p: w, actual } of g.matchup().autoActual(`${g.count.b}-${g.count.s}`)) for (let a = 0; a < 25; a++) tend[a] += w * actual[a];
+      } catch { tend = null; }
+    }
+    const look = C.ui.look;
     let cells = '';
     for (let r = 0; r < 5; r++) {
       for (let c = 0; c < 5; c++) {
@@ -714,27 +905,27 @@ export function mountGame(root, ctx) {
         const dots = pp.map((e, k) => [e, k + 1]).filter(([e]) => e.pitch.cell === idx).map(([e, k]) => {
           const j = perCell[idx] = (perCell[idx] || 0) + 1;
           const off = (j - 1) * 7;
-          return `<span class="pd ${RESULT_CLASS[e.pitch.result] || 'inplay'}" style="left:calc(50% - 9.5px + ${off}px);top:calc(50% - 9.5px - ${off}px)">${k}</span>`;
+          return `<span class="pd ${RESULT_CLASS[e.pitch.result] || 'inplay'}" style="left:calc(50% - 9.5px + ${off}px);top:calc(50% - 9.5px - ${off}px)">${k}${e.grade ? `<i class="${e.grade}">${GRADE_LETTER[e.grade]}</i>` : ''}</span>`;
         }).join('');
+        const lk = look !== null && inLook(idx, look) ? 'look' : '';
+        const td = tend ? `<span class="tend" style="opacity:${Math.min(0.3, tend[idx] * 2.4).toFixed(2)}"></span>` : '';
         if (interactive) {
-          const label = `${v > 0 ? (v === 2 ? 'high, out of the zone' : 'up') : v < 0 ? (v === -2 ? 'in the dirt' : 'down') : 'middle'} and ${h > 0 ? (h === 2 ? 'inside off the plate' : 'in') : h < 0 ? (h === -2 ? 'off the outside corner' : 'away') : 'over the plate'}`;
+          const label = `${spotWords(idx)}`;
           cells += `<button class="zcell ${inZone(idx) ? 'in' : ''}" style="${heat}" data-cell="${idx}" aria-pressed="${C.ui.cell === idx}" aria-label="${label}">${dots}</button>`;
-        } else cells += `<div class="zcell ${inZone(idx) ? 'in' : ''}" data-cell="${idx}" aria-hidden="true">${dots}</div>`;
+        } else cells += `<button class="zcell ${inZone(idx) ? 'in' : ''} ${lk}" data-look="${idx}" aria-label="Look for a pitch ${spotWords(idx)}">${td}${dots}</button>`;
       }
     }
-    const color = `color-mix(in srgb, ${g.half === 0 ? 'var(--away)' : 'var(--home)'} 38%, #17171a)`;
+    const color = `color-mix(in srgb, ${g.half === 0 ? 'var(--away)' : 'var(--home)'} 50%, #17171a)`;
     const sideWord = b.b === 'B' ? `Switch · ${side === 'L' ? 'lefty' : 'righty'} here` : side === 'L' ? 'Bats left' : 'Bats right';
+    const cap = interactive ? "Catcher's view"
+      : look !== null ? `Looking <b>${spotWords(look)}</b>` : (coachOn() ? 'Tap the zone to look for a pitch there' : "Catcher's view");
     return `<div class="plate-view ${side}">
       <div class="sil">${batterSilhouette(side, color)}<span class="sil-lab">${sideWord}</span></div>
       <div class="zone-box">
         <div class="zone-lab"><span>${side === 'R' ? 'Inside' : 'Away'}</span><span>${side === 'R' ? 'Away' : 'Inside'}</span></div>
-        <div class="zone ${interactive ? '' : 'track'}" role="group" aria-label="${interactive ? 'Pitch location, catcher\'s view' : 'Pitches this at-bat'}">${cells}<span class="sz"></span></div>
-        <div class="zone-cap">Catcher's view</div>
+        <div class="zone" role="group" aria-label="${interactive ? 'Pitch location, catcher\'s view' : 'Where to look for a pitch'}">${cells}<span class="sz"></span></div>
+        <div class="${interactive ? 'zone-cap' : 'look-cap'}">${cap}</div>
       </div></div>`;
-  }
-
-  function dotKey() {
-    return `<span class="key"><span><i class="pd ball"></i>Ball</span><span><i class="pd strike"></i>Strike</span><span><i class="pd foul"></i>Foul</span><span><i class="pd inplay"></i>In play</span></span>`;
   }
 
   function runnersHtml() {
@@ -749,102 +940,45 @@ export function mountGame(root, ctx) {
     return lines ? `<div class="runners-row"><div class="eyebrow">On base</div>${lines}</div>` : '';
   }
 
-  function atBat() {
-    const coach = coachOn();
+  function sideCol() {
     if (g.over) return '';
+    const coach = coachOn();
     if (!userBatting()) {
       const M = g.matchup();
       const types = M.types.map((t, i) => `<button class="ptype" data-ti="${i}" aria-pressed="${C.ui.ti === i}"><span class="kbd k">${i + 1}</span><b>${esc((PITCH_TYPES[t.key] || {}).short || t.key)}</b><small>${Math.round(t.q)} grade · ${t.use}%${coach && PITCH_HELP[t.key] ? ` · ${PITCH_HELP[t.key]}` : ''}</small></button>`).join('');
-      const pick = g.bases.map((r, i) => (r ? `<button class="btn small" data-pickoff="${i + 1}">Throw to ${['1st', '2nd', '3rd'][i]}</button>` : '')).join('');
-      return `<div class="card panel ab">
-        ${vsRow()}
-        <div class="ticker" aria-live="polite">${tickerText()}</div>
-        <div class="ab-body">${plateView(true)}
-          <div class="zone-side"><div class="eyebrow">Pitch</div><div class="ptypes">${types}</div>
-            <div class="legend"><label><input type="checkbox" data-scout ${C.ui.scouting ? 'checked' : ''}> Scouting report</label>
-              <span><span class="sq" style="background:var(--hot)"></span> hits it hard · <span class="sq" style="background:var(--cold)"></span> weak spot</span>
-              ${dotKey()}
-              ${coach ? '<span>Pick a pitch and tap a spot. The edges are hard to hit; a miss over the middle gets crushed. Repeat a pitch too often and he times it.</span>' : ''}</div></div></div>
-        <div class="actions">
-          <button class="btn primary" data-act="pitch" ${C.ui.cell === null ? 'disabled title="Tap a spot in the zone first"' : ''}>Throw it <span class="kbd">Enter</span></button>
-          <button class="btn ${C.ui.cell === null ? 'lit' : ''}" data-act="catcher">Catcher's call <span class="kbd">C</span></button>
-          <button class="btn" data-act="sim">Sim at-bat</button>
-          ${g.bases.some(Boolean) ? `<button class="chip" data-toggle="pitchout" aria-pressed="${C.ui.pitchout}">Pitchout${coach ? '<small>Throw wide so the catcher can gun down a runner. A sure ball.</small>' : ''}</button><button class="chip" data-toggle="slideStep" aria-pressed="${C.ui.slideStep}">Slide step${coach ? '<small>Quicker to the plate, a bit less control.</small>' : ''}</button>` : ''}
-        </div>
-        ${pick ? `<div class="actions">${pick}</div>` : ''}
-      </div>`;
+      return `<div class="g-side"><div class="g-stat">${statusText()}</div><div class="ptypes">${types}</div></div>`;
     }
-    return `<div class="card panel ab">
-      ${vsRow()}
-      <div class="ticker" aria-live="polite">${tickerText()}</div>
-      <div class="ab-body">${plateView(false)}
-        <div class="zone-side"><div class="legend">${dotKey()}</div>${runnersHtml()}</div></div>
-    </div>`;
+    const ap = (val, small) => `<button data-approach="${val}" aria-pressed="${C.ui.approach === val}">${APPROACH[val]}${coach ? `<small>${small}</small>` : ''}</button>`;
+    return `<div class="g-side"><div class="g-stat">${statusText()}</div>
+      <div class="appr">${ap('normal', 'Swing at good pitches')}${ap('take', "Don't swing this pitch")}${ap('sitFB', 'Look fastball, drive it')}${ap('protect', 'Shorten up, make contact')}</div></div>`;
   }
 
-  function signsPanel() {
-    const b = g.bases;
-    const s = g.count.s;
-    const coach = coachOn();
-    const help = (k) => (coach && SIGN_HELP[k] ? `<small>${SIGN_HELP[k]}</small>` : '');
-    const ap = (val, label) => `<button class="chip" data-approach="${val}" aria-pressed="${C.ui.approach === val}">${label}${help(val)}</button>`;
-    const odds = (base) => { const p = stealOdds(g, base); return p === null ? '' : `<span class="odds">${pct(p)}</span>`; };
-    const os = (val, label, ok, extra = '') => `<button class="chip" data-oneshot="${val}" aria-pressed="${C.ui.oneShot === val}" ${ok ? '' : 'disabled'}>${label}${ok ? extra : ''}${help(val)}</button>`;
-    return `<div class="card panel signs">
-      <h3><span>Give the sign</span><span class="aside">${g.count.b}-${g.count.s} count · ${esc(countTalk(g.count))}</span></h3>
-      <div class="group"><div class="eyebrow">Approach</div><div class="chips">
-        ${ap('normal', 'Swing away')}${ap('take', 'Take this pitch')}${ap('takeUntilStrike', 'Take until a strike')}${ap('sitFB', 'Sit on the fastball')}${ap('protect', 'Protect the plate')}</div></div>
-      <div class="group"><div class="eyebrow">Bunt</div><div class="chips">
-        ${os('sac', 'Sacrifice', g.outs < 2 && (b[0] || b[1]))}${os('drag', 'Bunt for a hit', true)}${os('squeeze', 'Suicide squeeze', g.outs < 2 && b[2])}${os('safety', 'Safety squeeze', g.outs < 2 && b[2])}</div></div>
-      <div class="group"><div class="eyebrow">Run</div><div class="chips">
-        ${os('steal2', 'Steal 2nd', b[0] && !b[1], odds(2))}${os('steal3', 'Steal 3rd', b[1] && !b[2], odds(3))}${os('steal4', 'Steal home', b[2], odds(4))}${os('double', 'Double steal', b[0] && b[1] && !b[2])}${os('hitrun', 'Hit and run', b[0] && !b[1] && g.outs < 2 && s < 2)}${os('runhit', 'Run and hit', b[0] && !b[1])}</div></div>
-      <div class="actions">
-        <button class="btn primary" data-act="bat">Next pitch <span class="kbd">Enter</span></button>
-        <button class="btn" data-act="sim">Sim at-bat</button>
-        <button class="btn" data-act="bench">Bench</button>
-        <button class="btn" data-act="bullpen">Bullpen</button>
-      </div></div>`;
+  function panel() {
+    if (g.over) return '<section class="g-panel"></section>';
+    return `<section class="g-panel"><div class="g-board">${scoreboard()}</div>${matchLine()}
+      <div class="g-ab">${plateView(!userBatting())}${sideCol()}</div></section>`;
   }
 
-  function managerPanel() {
-    if (g.over) return '';
-    if (userBatting()) return signsPanel();
-    const ft = g.fld();
-    const coach = coachOn();
-    const b = g.P(g.batter().pid);
-    const pre = !g.paStarted;
-    const al = ft.align;
-    const chip = (grp, val, label, dis = false) => `<button class="chip" data-align="${grp}:${val}" aria-pressed="${(grp === 'inf' ? al.inf : grp === 'of' ? al.of : String(!!al.shift)) === val}" ${dis ? 'disabled' : ''}>${label}${coach && DEF_HELP[`${grp}:${val}`] ? `<small>${DEF_HELP[`${grp}:${val}`]}</small>` : ''}</button>`;
-    return `<div class="card panel">
-      <h3><span>Manager</span><span class="aside">${pre ? 'Before the first pitch' : `${g.count.b}-${g.count.s} count`}</span></h3>
-      <div class="group"><div class="eyebrow">Infield</div>
-      <div class="chips">${chip('inf', 'normal', 'Normal')}${chip('inf', 'in', 'Drawn in')}${chip('inf', 'dp', 'Double-play depth')}${chip('inf', 'corners', 'Corners in')}${chip('inf', 'lines', 'Guard the lines')}</div></div>
-      <div class="group"><div class="eyebrow">Outfield</div>
-      <div class="chips">${chip('of', 'normal', 'Normal')}${chip('of', 'deep', 'No doubles')}${chip('of', 'shallow', 'Shallow')}${g.rules.shift ? chip('shift', 'true', 'Shift', b.b === 'R') : ''}</div></div>
-      ${runnersHtml()}
-      <div class="actions">
-        <button class="btn" data-act="ibb">Intentional walk</button>
-        <button class="btn" data-act="visit">Mound visit</button>
-        <button class="btn" data-act="bullpen">Bullpen</button>
-        <button class="btn" data-act="defense">Defense</button>
-      </div></div>`;
-  }
-
-  function coachBox() {
-    if (!coachOn() || !C.tip || g.over) return '';
-    return `<div class="coachbox"><span class="who">Coach</span><span>${esc(C.tip.text)}</span><button class="btn small ghost" data-tip="${C.tip.key}">Got it</button></div>`;
-  }
-
-  function gradeBar() {
-    const x = C.lastGrade;
-    if (!x) {
-      if (!coachOn()) return '';
-      return `<div class="gradebar"><span class="sq" style="background:var(--surface-3);color:var(--muted)">?</span><span>Your manager calls (pitcher, walk, positioning, pinch hitters, bunts, steals) get graded against the best option at that moment: <b class="grade-word green">A</b> best, <b class="grade-word yellow">B</b> close, <b class="grade-word orange">C</b> costly, <b class="grade-word red">F</b> a big miss.</span></div>`;
+  function dock() {
+    if (g.over) return '<footer class="g-dock"></footer>';
+    if (!userBatting()) {
+      const t = g.matchup().types[C.ui.ti];
+      const tname = t ? ((PITCH_TYPES[t.key] || {}).short || t.key) : '';
+      return `<footer class="g-dock">
+        <button class="btn primary" data-act="pitch" ${C.ui.cell === null ? 'disabled' : ''}>Throw it<small>${C.ui.cell === null ? 'Tap a spot first' : `${esc(tname)} ${esc(spotWords(C.ui.cell))}`}</small></button>
+        <button class="btn ${C.ui.cell === null ? 'lit' : ''}" data-act="catcher">Catcher's call<small>He picks it</small></button>
+        <button class="btn" data-act="manager">Manager<small>Bullpen &amp; more</small></button>
+        <button class="btn icon" data-act="sim" aria-label="Sim this at-bat" title="Sim this at-bat">⏭</button>
+      </footer>`;
     }
-    const fresh = C.gradeFresh;
-    C.gradeFresh = false;
-    const tail = x.grade === 'green' ? '' : ` Best was: ${esc(x.best)} (+${(x.delta * 100).toFixed(1)} pts).`;
-    return `<div class="gradebar ${fresh ? 'fresh' : ''}" style="--gc: var(--g-${x.grade})"><span class="sq ${x.grade}">${GRADE_LETTER[x.grade]}</span><span><b class="grade-word ${x.grade}">${GRADE_WORD[x.grade]}.</b> ${esc(x.mine)}.${tail}${x.why ? `<span class="why">Why: ${esc(x.why)}</span>` : ''}</span></div>`;
+    const o = C.ui.oneShot;
+    const sum = o ? ONESHOT[o] : `${APPROACH[C.ui.approach]}${C.ui.look !== null && C.ui.approach !== 'take' ? ', look ' + spotWords(C.ui.look) : ''}`;
+    return `<footer class="g-dock">
+      <button class="btn primary" data-act="bat">Next pitch<small>${esc(sum)}</small></button>
+      <button class="btn ${o ? 'has-sign' : ''}" data-act="plays">Signs<small>${o ? esc(ONESHOT[o]) : 'Bunt · steal · H&R'}</small></button>
+      <button class="btn" data-act="bench">Bench<small>Pinch-hit · run</small></button>
+      <button class="btn icon" data-act="sim" aria-label="Sim this at-bat" title="Sim this at-bat">⏭</button>
+    </footer>`;
   }
 
   function rosterTab() {
@@ -877,23 +1011,23 @@ export function mountGame(root, ctx) {
       }).join('') || '<p class="muted">Empty.</p>';
     }
     const tb = (k, l) => `<button role="tab" data-tab="${k}" aria-selected="${tab === k}">${l}</button>`;
-    return `<div class="card"><div class="tabs" role="tablist">${tb('lineup', 'Lineup')}${tb('bench', 'Bench')}${tb('pen', 'Bullpen')}${tb('opp', esc(g.teams[1 - me()].nick))}</div>
-      <div class="roster">${body}</div></div>`;
+    return `<div class="tabs" role="tablist">${tb('lineup', 'Lineup')}${tb('bench', 'Bench')}${tb('pen', 'Bullpen')}${tb('opp', esc(g.teams[1 - me()].nick))}</div>
+      <div class="roster">${body}</div>`;
   }
 
   function logHtml() {
     const evs = g.log.filter((e) => ['play', 'move', 'halfStart', 'history', 'pitch', 'walkoff', 'note', 'decision'].includes(e.kind) && !e.quiet);
     const out = [];
-    for (const e of evs.slice(-80)) {
+    for (const e of evs.slice(-120)) {
       let cls = 'ev';
       if (e.kind === 'play' || e.kind === 'walkoff') cls += ' play';
       if (e.kind === 'move') cls += ' move';
       if (e.kind === 'history') cls += ' hist';
       if (e.kind === 'halfStart') cls += ' half';
       const tag = e.kind === 'pitch' ? `${e.count.b}-${e.count.s}` : `${e.half ? 'B' : 'T'}${e.inning}`;
-      out.push(`<div class="${cls}"><span class="tag">${tag}</span><span>${esc(e.text)}${e.kind === 'history' ? ' <span class="muted">(real game)</span>' : ''}</span></div>`);
+      out.push(`<div class="${cls}"><span class="tag">${tag}</span><span>${esc(e.text)}${e.kind === 'history' ? ' <span class="muted">(real game)</span>' : ''}${e.grade ? ` <span class="sq ${e.grade}">${GRADE_LETTER[e.grade]}</span>` : ''}</span></div>`);
     }
-    return `<div class="card"><div class="tabs"><button aria-selected="true">Play-by-play</button></div><div class="log" id="log">${out.reverse().join('')}</div></div>`;
+    return `<div class="log">${out.reverse().join('')}</div>`;
   }
 
   function render() {
@@ -905,57 +1039,57 @@ export function mountGame(root, ctx) {
       C.tip = t ? { ...t, at: paKeyNow() + g.count.b + g.count.s } : null;
     }
     const kr = g.over ? {} : keyRuns(g);
-    const occ = ['first', 'second', 'third'].filter((_, i) => g.bases[i]);
-    const sit = `${g.half ? 'Bottom' : 'Top'} of the ${ordinal(g.inning)}, ${g.outs} out, ${occ.length === 3 ? 'bases loaded' : occ.length ? 'runner' + (occ.length > 1 ? 's' : '') + ' on ' + occ.join(' and ') : 'nobody on'}. ${g.P(g.batter().pid).n} is up.`;
     const pr = pressure();
-    root.innerHTML = `<div class="wrap gs" style="--away:${awayC};--home:${homeC};--mine:${me() ? homeC : awayC};--pressure:${pr.toFixed(2)}">
-      ${head()}
-      ${scoreboard()}
-      ${missionBar(w)}
-      ${bug(w)}
-      <div class="stage">
-        <section class="field-col">
-          <div class="fieldbox">${renderField(g, C.lastBall, fx, kr)}<div class="vignette"></div></div>
-          <div class="lastplay" aria-live="polite">${esc(C.lastPlay || sit)}</div>
-        </section>
-        <section class="desk">${coachBox()}${gradeBar()}${atBat()}${managerPanel()}</section>
-      </div>
-      <div class="lower">${logHtml()}${rosterTab()}</div></div>`;
-    const bar = root.querySelector('.wpbar i');
+    root.innerHTML = `<div class="gs" style="--away:${awayC};--home:${homeC};--mine:${me() ? homeC : awayC};--pressure:${pr.toFixed(2)}">
+      ${topBar(w)}${fieldPane(fx, kr)}${panel()}${dock()}</div>`;
+    C.flip = null;
+    const bar = root.querySelector('.g-line i');
     if (bar) requestAnimationFrame(() => requestAnimationFrame(() => { bar.style.width = bar.dataset.to + '%'; }));
     C.shownWp = w;
     setCrowd(pr);
   }
 
   // ------------------------------------------------------------ events
-  root.onclick = (e) => {
+  function onAction(e) {
     const t = e.target.closest('button, input');
     if (C.busy) {
-      if (t && (t.closest('.desk') || t.dataset.act === 'takeover')) takeOver();
+      if (t && (t.closest('.g-panel, .g-dock') || t.dataset.act === 'takeover')) takeOver();
       if (C.skip) C.skip();
       return;
     }
     if (!t) return;
     unlock();
     const d = t.dataset;
-    const inDesk = !!t.closest('.desk');
+    const inSheet = !!t.closest('#sheet');
+    if (inSheet && (d.close !== undefined && !d.act)) return;
+    const inDesk = !!t.closest('.g-panel, .g-dock, #sheet');
     if (C.autoOn && inDesk && d.act !== 'takeover') takeOver();
+    const redraw = () => { render(); if (inSheet) refreshSheet(); };
     if (d.act === 'takeover') { takeOver(); return render(); }
     if (d.tip) { markSeen(d.tip); C.tip = null; return render(); }
     if (d.ti !== undefined) { C.ui.ti = +d.ti; return render(); }
     if (d.cell !== undefined) { C.ui.cell = +d.cell; return render(); }
-    if (d.scout !== undefined) { C.ui.scouting = t.checked; return render(); }
-    if (d.tab) { C.ui.tab = d.tab; return render(); }
-    if (d.approach) { C.ui.approach = d.approach; return render(); }
-    if (d.oneshot) { C.ui.oneShot = C.ui.oneShot === d.oneshot ? null : d.oneshot; return render(); }
-    if (d.toggle) { C.ui[d.toggle] = !C.ui[d.toggle]; return render(); }
+    if (d.look !== undefined) {
+      // the middle of the zone, or the same spot again, means no look
+      const idx = +d.look;
+      const h = Math.max(-1, Math.min(1, cellH(idx))), v = Math.max(-1, Math.min(1, cellV(idx)));
+      const lk = h || v ? cellIndex(h, v) : null;
+      C.ui.look = C.ui.look === lk ? null : lk;
+      if (C.ui.approach === 'take') C.ui.approach = 'normal';
+      return render();
+    }
+    if (d.tab) { C.ui.tab = d.tab; return redraw(); }
+    if (d.approach) { C.ui.approach = d.approach; return redraw(); }
+    if (d.oneshot) { C.ui.oneShot = C.ui.oneShot === d.oneshot ? null : d.oneshot; return redraw(); }
+    if (d.toggle) { C.ui[d.toggle] = !C.ui[d.toggle]; return redraw(); }
     if (d.align) {
       const [grp, val] = d.align.split(':');
       if (grp === 'shift') g.setAlign(me(), { shift: !g.teams[me()].align.shift });
       else g.setAlign(me(), { [grp]: val });
-      return render();
+      return redraw();
     }
     if (d.pickoff) {
+      closeSheet();
       const snap = takeSnap();
       g.pickoff(+d.pickoff);
       C.manualPA = paKeyNow();
@@ -964,9 +1098,11 @@ export function mountGame(root, ctx) {
     switch (d.act) {
       case 'pitch': return doPitch(false, false);
       case 'catcher': return doPitch(true, false);
-      case 'bat': return doBat(false);
+      case 'bat': if (inSheet) closeSheet(); return doBat(false);
       case 'sim': return simAtBat();
+      case 'hidenote': C.noteGrade = null; C.notePitch = null; return render();
       case 'ibb': {
+        closeSheet();
         if (!C.graded) gradeDef(true);
         bump('ibb');
         const snap = takeSnap();
@@ -976,19 +1112,26 @@ export function mountGame(root, ctx) {
       case 'visit': {
         const r = g.visit();
         if (!r.ok) toast(r.reason); else { bump('visit'); toast('Mound visit: settles him down for a hitter or two.'); }
-        return render();
+        return redraw();
       }
+      case 'manager': return managerSheet();
+      case 'plays': return playsSheet();
+      case 'menu': return menuSheet();
+      case 'box': return boxSheet();
+      case 'log': return logSheet();
+      case 'lineups': return lineupSheet();
       case 'bullpen': return bullpenSheet(false);
       case 'bench': return benchSheet();
       case 'defense': return defenseSheet();
-      case 'coach': setCoach(!coachOn()); C.tip = null; return render();
-      case 'every': setSetting('pitches', settings().pitches === 'every' ? 'key' : 'every'); render(); return maybeAuto();
-      case 'sound': { const on = toggleSound(); if (on) setCrowd(pressure()); return render(); }
-      case 'help': return ctx.onHelp();
-      case 'quit': return ctx.onQuit();
+      case 'coach': setCoach(!coachOn()); C.tip = null; return redraw();
+      case 'auto': setSetting('pitches', settings().pitches === 'key' ? 'every' : 'key'); redraw(); return maybeAuto();
+      case 'sound': { const on = toggleSound(); if (on) setCrowd(pressure()); return redraw(); }
+      case 'help': closeSheet(); return ctx.onHelp();
+      case 'quit': closeSheet(); return ctx.onQuit();
       default:
     }
-  };
+  }
+  root.onclick = onAction;
   const onKey = (e) => {
     if (document.getElementById('sheet') || C.done) return;
     const co = document.querySelector('.coldopen');
@@ -1035,7 +1178,8 @@ export function mountGame(root, ctx) {
     clearTimeout(C.autoTimer);
     C.done = true;
     stopCrowd();
-    document.querySelectorAll('.fx-banner, .coldopen').forEach((el) => el.remove());
+    document.body.classList.remove('in-game');
+    document.querySelectorAll('.fx-banner, .coldopen, .confetti').forEach((el) => el.remove());
   };
   setupPA();
   refreshWp();

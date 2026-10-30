@@ -4,11 +4,12 @@ import { gradeDefense, gradeOffense } from '../engine/evaluate.js';
 import { esc, pct, fmtDate } from './util.js';
 import { GRADE_EMOJI, GRADE_LETTER, GRADE_WORD, TACTIC_LABEL } from './play.js';
 import { load, managerStyle, starCount, totalStars } from './store.js';
+import { PASS, member, priceText } from './pass.js';
 import { teamColors } from './teams.js';
 
 const ROUND_NAME = { worldseries: 'World Series', lcs: 'League Championship', divisionseries: 'Division Series', wildcard: 'Wild Card', playoff: 'Tiebreaker' };
 // a forgiving, famous first game for someone who has never played
-const FIRST_GAME = 'LAN202110060';
+export const FIRST_GAME = 'LAN202110060';
 
 // Playlists are grouped by the situation going into the 9th, never by how the
 // game ended, so they don't give anything away.
@@ -100,7 +101,7 @@ export function homeHtml(app) {
       <div class="tiles">
         <a class="card tile" href="#survivor"><span class="eyebrow">Win or Go Home</span><h3>${surv.run ? `Run alive: ${surv.run.wins} won` : 'One loss and you\'re out'}</h3>
           <p>Historic 9th innings back to back. Best run: ${surv.best}.</p></a>
-        <a class="card tile" href="#archive"><span class="eyebrow">The archive</span><h3>500 ninth innings</h3>
+        <a class="card tile" href="${PASS.on && !member() ? '#pass' : '#archive'}"><span class="eyebrow">The archive${PASS.on && !member() ? ' · Season Pass' : ''}</span><h3>500 ninth innings</h3>
           <p>Every postseason game since 1903 that came down to the last frames, plus the tiebreaker playoffs.</p></a>
         <a class="card tile" href="#stats"><span class="eyebrow">Your record</span><h3>${games ? `${st.totals.wins}-${games - st.totals.wins} · ${totalStars()} ★` : 'No games yet'}</h3>
           <p>${games ? `Daily streak ${st.streak.cur} · ${st.totals.calls.green || 0} A calls` : 'Wins, stars, streaks and your managing style show up here.'}</p></a>
@@ -114,7 +115,7 @@ export function homeHtml(app) {
       return `<div class="coll"><b>${esc(c.name)}</b><span>${esc(c.desc)} · ${rows.length} games</span>
         <div class="prog" title="${stars} of ${rows.length * 3} stars"><i style="width:${Math.round((stars / (rows.length * 3)) * 100)}%"></i></div>
         <span>${stars} of ${rows.length * 3} ★ · ${won} won</span>
-        <div class="actions"><a class="btn small lit" href="#rand-${c.key}">Play one</a><a class="btn small ghost" href="#list-${c.key}">See all</a></div></div>`;
+        <div class="actions"><a class="btn small lit" href="${PASS.on && !member() ? '#pass' : `#rand-${c.key}`}">${PASS.on && !member() ? 'Season Pass' : 'Play one'}</a><a class="btn small ghost" href="#list-${c.key}">See all</a></div></div>`;
     }).join('')}</div>
     ${first ? `<div class="section-h"><h2>Today's game</h2></div><div class="hero" style="margin-top:0;grid-template-columns:minmax(0,1fr)">${todayCard}</div>` : ''}
     <div class="section-h"><h2>Legends</h2><a href="#list-legends" class="muted">See all 80</a></div>
@@ -224,14 +225,16 @@ export function pregameHtml(app, sc, choice) {
             ${sc.line[s].map((v, i) => `<td class="${i < n - 3 ? 'early' : ''}">${v}</td>`).join('')}<td class="gap"></td><td class="rhe">${sc.score9[s]}</td><td class="rhe">${sc.start.he ? sc.start.he[s][0] : ''}</td><td class="rhe">${sc.start.he ? sc.start.he[s][1] : ''}</td></tr>`).join('')}</tbody></table></div></div>
       </div>
       <div class="card panel" style="align-content:start">
+        ${choice.challenge ? `<div class="gradebar"><span class="sq yellow">!</span><span><b>A friend challenged you.</b> They managed the ${esc(t[choice.side].nick)} here and ${choice.challenge.won ? 'won' : 'lost'} ${esc(choice.challenge.score)}. Same game, same luck: beat their calls.${choice.challenge.grades.length ? `<span class="why">Their calls: ${choice.challenge.grades.map((x) => gradeSq(x)).join(' ')}</span>` : ''}</span></div>` : ''}
         <div class="eyebrow">${daily ? "Today's game" : `No. ${sc.rank} of 500`}${sc.stakes ? ' · ' + esc(sc.stakes) : ''} · ${esc(sc.series)}</div>
         ${load().played[sc.id] ? `<div class="muted" style="font-size:13px">Your best here: ${starMarks(starCount(sc.id))}</div>` : ''}
         <h3>Pick your dugout</h3>
-        <div class="dugout-pick">${[0, 1].map((s) => `<button class="dugout" data-side="${s}" aria-pressed="${s === side}" style="--tc:${colors[s]}">
+        <div class="dugout-pick">${[0, 1].map((s) => `<button class="dugout" data-side="${s}" aria-pressed="${s === side}" style="--tc:${colors[s]}" ${choice.challenge && s !== side ? 'disabled' : ''}>
           <b>${esc(t[s].nick)}</b><small>${s === 0 ? 'Visitors' : 'Home'} · ${esc(situation(row, s))}</small><small>Real manager: ${esc(t[s].mgr || 'unknown')}</small></button>`).join('')}</div>
         <h3>Start at</h3>
         <div class="starts">${sc.starts.map((st, i) => {
           const l = startLabel(sc, st);
+          if (choice.challenge && choice.start !== i) return '';
           return `<button class="start-opt" data-start="${i}" aria-pressed="${choice.start === i}"><b>${esc(l.title)}</b><br><span class="muted" style="font-size:13px">${esc(l.sub)}</span></button>`;
         }).join('')}</div>
         <div class="eyebrow">Rules for ${sc.rules.season}</div>
@@ -280,14 +283,38 @@ export function resultHtml(app, sc, res, extra) {
         </div>
         <div class="card panel" style="--mine:${colors[me]}"><h3>Win chance, pitch by pitch</h3>${wpChart(res.wp, colors[me])}</div>
         <div class="card panel"><h3><span>Your calls</span><span class="aside">${counts.green} A · ${counts.yellow} B · ${counts.orange} C · ${counts.red} F</span></h3>${callRows}</div>
+        ${pitchCallsHtml(res)}
       </div>
       <div style="display:grid;gap:14px;align-content:start;min-width:0">
+        ${extra.challenge ? challengeHtml(sc, res, extra.challenge) : ''}
         <div class="card panel"><h3>Share</h3><div class="share-text" id="share">${esc(shareText(app, sc, res))}</div>
-          <div class="actions"><button class="btn" data-copy>Copy result</button></div></div>
+          <div class="actions"><button class="btn primary" data-sharecard>Share</button><button class="btn" data-challenge>Challenge a friend</button><button class="btn ghost" data-copy>Copy text</button></div>
+          <p class="muted" style="font-size:12.5px;margin:0">A challenge link gives your friend this exact game with the same luck, so the better manager wins.</p></div>
         <div class="card panel"><h3>You vs. the real manager</h3><div id="realcalls"><p class="muted">Grading ${esc(t[me].mgr || 'the real manager')}'s calls…</p></div></div>
         <div class="card panel"><h3>Film room: what really happened</h3>${filmRoom(sc)}</div>
       </div>
     </div>${footer()}</div>`;
+}
+
+const GPA_LETTERS = { green: 4, yellow: 3, orange: 2, red: 0 };
+function pitchCallsHtml(res) {
+  const pg = res.pitchGrades || [];
+  if (!pg.length) return '';
+  const c = { green: 0, yellow: 0, orange: 0, red: 0 };
+  pg.forEach((x) => { c[x]++; });
+  const iq = pg.reduce((s, x) => s + GPA_LETTERS[x], 0) / pg.length;
+  return `<div class="card panel"><h3><span>Pitch calls</span><span class="aside">${pg.length} graded · ${c.green} A · ${c.yellow} B · ${c.orange} C · ${c.red} F</span></h3>
+    <div class="versus" style="grid-template-columns:auto 1fr;text-align:left;gap:16px"><div><b class="num">${iq.toFixed(1)}</b><span>Pitch IQ</span></div>
+    <p class="muted" style="margin:0;font-size:13px">Every pitch you called or sign you gave, graded against the best one for that count and hitter. 4.0 is perfect.</p></div>
+    <div class="gridsq">${pg.map(gradeSq).join('')}</div></div>`;
+}
+function challengeHtml(sc, res, ch) {
+  const mine = gpa(res.grades), theirs = gpa(ch.grades);
+  const fmt = (v) => (v === null ? '—' : v.toFixed(1));
+  const winner = res.won && !ch.won ? 'you' : ch.won && !res.won ? 'them' : (mine ?? 0) >= (theirs ?? 0) ? 'you' : 'them';
+  return `<div class="card panel"><h3>You vs. your friend</h3>
+    <div class="versus"><div><b class="num">${res.won ? 'W' : 'L'} ${res.score[res.side]}-${res.score[1 - res.side]}</b><span>You · calls ${fmt(mine)}</span></div><span class="vs">vs</span><div><b class="num">${ch.won ? 'W' : 'L'} ${esc(ch.score)}</b><span>Them · calls ${fmt(theirs)}</span></div></div>
+    <p style="margin:0">${winner === 'you' ? 'You out-managed them.' : 'They got you this time.'} Same game, same luck: <button class="linkbtn" data-challenge>send one back</button>.</p></div>`;
 }
 
 function filmRoom(sc) {
@@ -467,6 +494,15 @@ export function statsHtml(app) {
       const stars = rows.reduce((n, r) => n + starCount(r.id), 0);
       return `<a class="coll" href="#list-${c.key}"><b>${esc(c.name)}</b><div class="prog"><i style="width:${Math.round((stars / (rows.length * 3)) * 100)}%"></i></div><span>${stars} of ${rows.length * 3} ★</span></a>`;
     }).join('')}</div>
+    <div class="section-h"><h2>Keep your record safe</h2><span class="muted">Your record lives in this browser only</span></div>
+    <div class="card panel">
+      <p style="margin:0">Safari can clear a site's saved data after a week away, and a new phone or iPad starts empty. Copy your save code somewhere safe; paste it back to restore your wins, stars, streak${PASS.on ? ' and Season Pass' : ''}. Adding Last Licks to your Home Screen also keeps it from being cleared.</p>
+      <div class="actions"><button class="btn" id="savecode">Copy my save code</button></div>
+      <div class="group"><label class="eyebrow" for="restore">Restore from a save code</label>
+        <textarea id="restore" rows="2" placeholder="LL1.…" style="width:100%;background:var(--surface-2);border:1px solid var(--line-2);border-radius:8px;color:var(--ink);padding:9px 10px;font:13px/1.4 var(--font-type)"></textarea>
+        <div class="actions"><button class="btn" id="restorebtn">Restore</button></div></div>
+    </div>
+    ${PASS.on ? `<div class="section-h"><h2>Season Pass</h2></div><div class="card panel">${member() ? `<p style="margin:0">Your Season Pass is active on this device${load().pass.email ? ` (${esc(load().pass.email)})` : ''}. Every game in the archive is open.</p><div class="actions"><button class="btn ghost" id="forgetpass">Remove it from this device</button></div>` : `<p style="margin:0">All 500 games, replays and playlists for ${priceText()}.</p><div class="actions"><a class="btn primary" href="#pass">See the Season Pass</a></div>`}</div>` : ''}
     <div class="section-h"><h2>Recent games</h2></div>
     <div class="list">${recent.map(([id, p]) => {
       const r = app.index.find((x) => x.id === id);
@@ -476,21 +512,52 @@ export function statsHtml(app) {
     ${footer()}</div>`;
 }
 
+// ---------------------------------------------------------------- season pass
+export function passHtml(app) {
+  const has = member();
+  const ready = !!PASS.checkout;
+  const perks = [
+    ['All 500 ninth innings', 'Every World Series, LCS, Division Series and Wild Card game since 1903 that came down to the last frames.'],
+    ['Replay anything', 'Any game, from either dugout, from the whole 9th, the bottom of the 9th or the moment that swung it.'],
+    ['Playlists and Legends', 'Winner-take-all, facing elimination, tied after eight, one-run games and the 80 most famous ninths.'],
+    ['Every star to chase', `${app.index.length * 3} stars across the archive.`],
+  ];
+  return `<div class="wrap"><div class="pregame">
+    <div class="today"><div class="lights"></div>
+      <div class="eyebrow">Season Pass</div><h1>Every ninth inning, any time</h1>
+      <div class="sit lit-text">${esc(priceText())}</div>
+      <p class="intro">Free players get today's game and Win or Go Home. The Season Pass opens the whole archive.${PASS.per ? ' Cancel anytime.' : ''}</p>
+      ${has ? '<p><b>Your Season Pass is active.</b> <a href="#archive">Go to the archive</a></p>'
+        : ready ? `<div class="actions"><a class="btn primary" href="${esc(PASS.checkout)}" target="_blank" rel="noopener">Get the Season Pass</a></div>
+          <p class="muted" style="font-size:13px">Payment is handled by Lemon Squeezy. Your license key arrives by email; enter it below on any device.</p>`
+          : '<p class="muted">Season Passes open soon.</p>'}
+    </div>
+    <div class="card panel" style="align-content:start">
+      ${perks.map(([h, p]) => `<div><b>${esc(h)}</b><div class="muted" style="font-size:13.5px">${esc(p)}</div></div>`).join('')}
+      ${has ? '' : `<div class="group"><label class="eyebrow" for="passkey">Have a license key?</label>
+        <input id="passkey" autocomplete="off" spellcheck="false" placeholder="XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX" style="width:100%;background:var(--surface-2);border:1px solid var(--line-2);border-radius:8px;color:var(--ink);padding:10px 11px;font:14px var(--font-type)">
+        <div class="actions"><button class="btn" id="redeem">Unlock</button></div><p class="muted" id="passmsg" style="margin:0;font-size:13px"></p></div>`}
+    </div></div>${footer()}</div>`;
+}
+
 // ---------------------------------------------------------------- how to play
 export function howtoHtml() {
   return `<div class="howto">
     <p>You're the manager for the 9th inning of a real postseason game: the real lineups, benches and bullpens, rated from that season's statistics. Win the game.</p>
     <ul>
-      <li><b>When your team is in the field</b>, call the pitch: pick a pitch type, tap a spot in the zone (catcher's view, with the batter's silhouette on the side he hits from) and throw it. Or let the catcher call it. Set your infield and outfield, walk a hitter, visit the mound, warm up and bring in relievers.</li>
-      <li><b>When your team is batting</b>, give a sign: swing away, take, sit on the fastball, protect the plate, bunt, squeeze, steal, hit and run. Before an at-bat you can pinch-hit or pinch-run. Lightning bolts show speed: two for a burner, one for a fast runner.</li>
-      <li><b>The game stops you when it matters.</b> You call the first pitch of every at-bat, every pitch with three balls or two strikes, and anything after runners move. The routine pitches in between play themselves. Turn on <b>Every pitch</b> to call them all.</li>
+      <li><b>When your team is in the field</b>, call the pitch: pick a pitch type, tap a spot in the zone (catcher's view, with the batter standing on the side he hits from) and throw it, or let the catcher call it. <b>Manager</b> has the bullpen, intentional walks, mound visits, fielder positioning and pickoffs.</li>
+      <li><b>When your team is batting</b>, pick an approach (swing away, take, sit on the fastball, protect the plate). Tap the zone to have your hitter <b>look for a pitch</b> in that spot: if it comes there he hits it harder, if not he's fooled. Read the pitcher: the shading shows where he likes to throw in this count. With two strikes, don't guess. <b>Signs</b> has bunts, squeezes, steals and the hit-and-run, with each runner's odds; <b>Bench</b> has pinch hitters and runners. Lightning bolts show speed.</li>
+      <li><b>You call every pitch.</b> Want it quicker? Turn on <b>Auto-play</b> in the menu: routine pitches play themselves, and the game stops you for the first pitch of each at-bat, every pitch with three balls or two strikes, and anything after runners move. ⏭ sims the rest of an at-bat.</li>
       <li><b>Close plays at the plate</b> come to you: send the runner or hold him.</li>
-      <li><b>Every manager call is graded</b> against the best option at that moment, using an exact win-probability model: <b class="grade-word green">A</b> best or as good, <b class="grade-word yellow">B</b> close, <b class="grade-word orange">C</b> costly, <b class="grade-word red">F</b> a big miss. After each one you see why. Pitch calls change what happens but aren't graded.</li>
-      <li><b>The coach</b> explains every button in plain English for your first games. Turn it on or off with the Coach button.</li>
+      <li><b>Every manager call is graded</b> against the best option at that moment, using an exact win-probability model: <b class="grade-word green">A</b> best or as good, <b class="grade-word yellow">B</b> close, <b class="grade-word orange">C</b> costly, <b class="grade-word red">F</b> a big miss. After each one you see why.</li>
+      <li><b>Every pitch call and sign is graded too</b>, on a finer scale: the letter sits on the pitch mark, costly ones come with the better choice, and your Pitch IQ shows at the end. A good call can still get hit; the grade is about the decision.</li>
+      <li><b>The coach</b> explains things in plain English for your first games. Turn it on or off in the menu.</li>
       <li><b>The other dugout</b> is run by the computer. When your game reaches the same spot as the real one, it makes the real manager's moves.</li>
       <li><b>Stars:</b> every game has three. Win, make no costly calls, and grade out better than the real manager.</li>
+      <li><b>Challenge a friend</b> from the results: they get the same game with the same luck, so the better manager wins.</li>
     </ul>
     <p><b>Keyboard:</b> <span class="kbd">1</span>-<span class="kbd">6</span> pitch type, arrow keys move the target, <span class="kbd">Enter</span> throws or takes the next pitch, <span class="kbd">C</span> catcher's call. A tap or <span class="kbd">Enter</span> skips an animation.</p>
     <p><b>Modes:</b> Today's game is the same for everyone each day. Win or Go Home strings 9th innings together until you lose; if every call in a loss graded A or B, you get one free pass per run. Playlists group the archive by situation.</p>
+    <p><b>On a phone or iPad,</b> add Last Licks to your Home Screen (Share, then Add to Home Screen): it opens full screen like an app, and your record is safer there. The Record page has a save code to back it up.</p>
   </div>`;
 }

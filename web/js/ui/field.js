@@ -154,6 +154,7 @@ export function renderField(g, last, fx = null, keyRuns = {}) {
   // last batted ball: where it went (animated only right after the play)
   const ball = fx && fx.ball ? fx.ball : last;
   const fly = animate && !!fx.ball;
+  let chase = null;
   if (ball && ball.prof) {
     const p = ball.prof;
     let [tx, ty] = BASE_POS[p.field] || BASE_POS[8];
@@ -171,6 +172,7 @@ export function renderField(g, last, fx = null, keyRuns = {}) {
       : `M${hx.toFixed(1)} ${hy.toFixed(1)} Q${((hx + lx) / 2).toFixed(1)} ${(Math.min(hy, ly) - lift).toFixed(1)} ${lx.toFixed(1)} ${ly.toFixed(1)}`;
     const groundPath = `M${hx.toFixed(1)} ${hy.toFixed(1)} L${lx.toFixed(1)} ${ly.toFixed(1)}`;
     const dur = p.bb === 'G' ? 0.7 : ball.category === 'HR' ? 1.5 : 1.15;
+    if (fly) chase = { field: p.field, x: tx, y: ty, dur, hr: ball.category === 'HR' };
     s += `<path d="${air}" class="trail ${fly ? 'draw' : ''}" style="--dur:${dur}s" pathLength="1" fill="none" stroke="var(--chalk)" stroke-width="1.6" stroke-dasharray="${fly ? '1 1' : '.012 .018'}" stroke-linecap="round"/>`;
     if (fly) {
       s += `<ellipse rx="3.2" ry="1.4" fill="#000" opacity=".5"><animateMotion dur="${dur}s" fill="freeze" path="${groundPath}"/></ellipse>
@@ -187,12 +189,21 @@ export function renderField(g, last, fx = null, keyRuns = {}) {
     const d = depth(wy) * S;
     const r = 7.6 * d;
     const pl = g.P(pid);
-    s += `<g class="fielder"><title>${esc(pl.n)} (${POS_ABBR[pos]})</title>
+    let run = '';
+    if (chase && chase.field === pos && !chase.hr) {
+      // run most of the way to the ball, a beat after contact
+      const [bx2, by2] = proj(chase.x, chase.y);
+      const k = pos <= 6 ? 0.8 : 0.9;
+      run = `<animateMotion dur="${(chase.dur * 0.9).toFixed(2)}s" begin=".12s" fill="freeze" path="M0 0 L${((bx2 - x) * k).toFixed(1)} ${((by2 - y) * k).toFixed(1)}"/>`;
+    }
+    s += `<g class="fielder">${run}<title>${esc(pl.n)} (${POS_ABBR[pos]})</title>
       <ellipse cx="${x.toFixed(1)}" cy="${(y + r * 0.9).toFixed(1)}" rx="${(r * 1.1).toFixed(1)}" ry="${(r * 0.38).toFixed(1)}" fill="#000" opacity=".45"/>
       <circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${r.toFixed(1)}" fill="${fColor}" stroke="#fff" stroke-opacity=".85" stroke-width="1.2"/>
       <text x="${x.toFixed(1)}" y="${(y + r * 0.36).toFixed(1)}" text-anchor="middle" font-size="${(r * 0.95).toFixed(1)}" font-weight="800" fill="#fff" font-family="var(--font-body)">${POS_ABBR[pos]}</text>
       <text class="fname" x="${x.toFixed(1)}" y="${(y + r + 9).toFixed(1)}" text-anchor="middle" font-size="8.6" fill="var(--chalk)" font-family="var(--font-body)" font-weight="600" paint-order="stroke" stroke="#000" stroke-opacity=".7" stroke-width="2.6">${esc(pl.l || pl.n)}</text></g>`;
   }
+
+  if (chase && chase.hr) s += fireworks();
 
   // runners who scored on the play run home and fade out
   if (animate && fx.scoredFrom) {
@@ -250,6 +261,44 @@ export function renderField(g, last, fx = null, keyRuns = {}) {
     <text x="${(side === 'L' ? px + 12 : px - 12).toFixed(1)}" y="${(py + 3.5).toFixed(1)}" text-anchor="${side === 'L' ? 'start' : 'end'}" font-size="9.6" font-weight="700" fill="var(--chalk)" font-family="var(--font-body)" paint-order="stroke" stroke="#000" stroke-opacity=".8" stroke-width="3">${esc(batter.l || batter.n)}${key ? ` · ${esc(key.toLowerCase())}` : ''}</text></g>`;
   s += `</svg>`;
   return s;
+}
+
+// Bursts over the stands and flashes in the crowd, for a home run.
+function fireworks() {
+  const colors = ['#fff1cf', '#ffd27a', '#ff8a6a', '#9fd0ff', '#ffffff'];
+  let out = '<g class="fireworks" aria-hidden="true">';
+  for (let i = 0; i < 6; i++) {
+    const cx = 60 + i * 56 + (i % 2) * 14, cy = 26 + (i % 3) * 16;
+    const c = colors[i % colors.length];
+    const rays = Array.from({ length: 12 }, (_, k) => {
+      const a = (k / 12) * Math.PI * 2;
+      return `<line x1="${cx}" y1="${cy}" x2="${(cx + 22 * Math.cos(a)).toFixed(1)}" y2="${(cy + 22 * Math.sin(a)).toFixed(1)}"/>`;
+    }).join('');
+    out += `<g class="spark-fx" style="animation-delay:${(0.35 + i * 0.22).toFixed(2)}s" stroke="${c}" stroke-width="1.6" stroke-linecap="round">${rays}</g>`;
+  }
+  for (let i = 0; i < 26; i++) {
+    const x = 10 + ((i * 53) % 380), y = 8 + ((i * 29) % 70);
+    out += `<circle class="flash-fx" cx="${x}" cy="${y}" r="1.4" fill="#fff" style="animation-delay:${((i * 0.37) % 1.6).toFixed(2)}s"/>`;
+  }
+  return out + '</g>';
+}
+
+// The pitch on its way: a ball from the mound to the plate, drawn over the field.
+export function pitchFlight(svg, ms) {
+  if (!svg || reduceMotion()) return;
+  const [mx, my] = proj(200, 266), [px, py] = proj(200, 334);
+  const ns = 'http://www.w3.org/2000/svg';
+  const c = document.createElementNS(ns, 'circle');
+  c.setAttribute('r', '2.8'); c.setAttribute('fill', '#fff'); c.setAttribute('cx', mx); c.setAttribute('cy', my);
+  for (const [attr, from, to] of [['cx', mx, px], ['cy', my, py], ['r', 2.2, 3.6]]) {
+    const an = document.createElementNS(ns, 'animate');
+    an.setAttribute('attributeName', attr); an.setAttribute('from', from); an.setAttribute('to', to);
+    an.setAttribute('dur', `${Math.max(0.12, ms / 1000)}s`); an.setAttribute('begin', 'indefinite'); an.setAttribute('fill', 'freeze');
+    c.appendChild(an);
+  }
+  svg.appendChild(c);
+  c.querySelectorAll('animate').forEach((an) => { try { an.beginElement(); } catch { /* old browsers: the ball just sits */ } });
+  setTimeout(() => c.remove(), ms + 400);
 }
 
 function describe(g) {

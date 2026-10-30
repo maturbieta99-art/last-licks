@@ -1,13 +1,20 @@
 // Boot and routing.
 import { makeRng } from '../engine/rng.js';
 import { $, esc, toast, openSheet, closeSheet, copyText, dayNumber, dailyOrder } from './util.js';
-import { load, save, recordGame, recordStars } from './store.js';
+import { load, save, recordGame, recordStars, exportCode, importCode } from './store.js';
+import { PASS, canPlay, redeem, recheck, forget, member } from './pass.js';
+import { resultCard, shareResult } from './share.js';
+import { teamColors } from './teams.js';
 import { mountGame } from './play.js';
 import { soundOn, toggleSound, unlock } from './sound.js';
 import {
   homeHtml, archiveHtml, pregameHtml, resultHtml, statsHtml, howtoHtml, shareText,
-  realManagerCalls, realCallsHtml, wireChart, setNameShard, starsFor, starsHtml, collectionRows,
+  realManagerCalls, realCallsHtml, wireChart, setNameShard, starsFor, starsHtml, collectionRows, passHtml, FIRST_GAME,
 } from './views.js';
+
+const LETTER = { green: 'A', yellow: 'B', orange: 'C', red: 'F' };
+const FROM_LETTER = { A: 'green', B: 'yellow', C: 'orange', F: 'red' };
+const gateCtx = () => ({ firstGame: FIRST_GAME, day: app.dayNo });
 
 const app = { index: [], shards: {}, game: null, filters: { limit: 120 }, pre: null };
 const root = () => document.getElementById('app');
@@ -71,16 +78,24 @@ async function route() {
   const h = (location.hash || '#home').slice(1);
   try {
     if (h === 'home' || h === '') return renderHome();
-    if (h === 'archive') return renderArchive();
-    if (h.startsWith('list-')) { app.filters = { limit: 120, coll: h.slice(5) }; return renderArchive(); }
-    if (h.startsWith('rand-')) return randomFrom(h.slice(5));
-    if (h === 'stats') { shell('stats', statsHtml(app)); return; }
+    const locked = PASS.on && !member();
+    if (h === 'pass') return renderPass();
+    if (h.startsWith('c-')) return renderChallenge(h.slice(2));
+    if (h === 'archive') return locked ? renderPass() : renderArchive();
+    if (h.startsWith('list-')) { if (locked) return renderPass(); app.filters = { limit: 120, coll: h.slice(5) }; return renderArchive(); }
+    if (h.startsWith('rand-')) return locked ? renderPass() : randomFrom(h.slice(5));
+    if (h === 'stats') { shell('stats', statsHtml(app)); wireStats(); return; }
     if (h === 'daily') {
       const id = todayRow().id;
+      if (!canPlay('daily', id, gateCtx())) return renderPass("You've played today's game. Come back tomorrow for a new one, or get the Season Pass to replay it and play any of the 500.");
       return renderPregame(id, { mode: 'daily' });
     }
     if (h === 'survivor') return renderSurvivor();
-    if (h.startsWith('s-')) return renderPregame(h.slice(2), { mode: 'archive' });
+    if (h.startsWith('s-')) {
+      const id = h.slice(2);
+      if (!canPlay('archive', id, gateCtx())) return renderPass();
+      return renderPregame(id, { mode: 'archive' });
+    }
     return renderHome();
   } catch (e) {
     console.error(e);
@@ -159,7 +174,7 @@ async function renderPregame(id, opts) {
 function startGame(sc, shard, choice) {
   const startIdx = sc.starts[choice.start] ? sc.starts[choice.start].idx : 0;
   const day = app.dayNo;
-  const seed = choice.mode === 'daily' ? `daily-${day}-${sc.id}-${choice.side}-${startIdx}` : `${sc.id}-${Date.now()}`;
+  const seed = choice.seed || (choice.mode === 'daily' ? `daily-${day}-${sc.id}-${choice.side}-${startIdx}` : `${sc.id}-${Date.now().toString(36)}`);
   shell(choice.mode === 'daily' ? 'daily' : choice.mode === 'survivor' ? 'survivor' : 'archive', '<div id="gameroot"></div>');
   const gr = document.getElementById('gameroot');
   app.game = mountGame(gr, {
@@ -197,6 +212,7 @@ function finishGame(sc, shard, choice, res) {
       save();
     }
   }
+  if (choice.challenge) extra.challenge = choice.challenge;
   // two stars are known now; the third waits for the real manager's grades
   extra.stars = starsFor(res, null);
   recordStars(sc.id, extra.stars);
@@ -214,8 +230,27 @@ function finishGame(sc, shard, choice, res) {
         toast('Selected. Copy it with your keyboard.');
       }
     }
-    if (e.target.closest('[data-again]')) startGame(sc, shard, { ...choice, mode: choice.mode === 'daily' ? 'archive' : choice.mode === 'survivor' ? 'archive' : choice.mode });
-    if (e.target.closest('[data-swap]')) startGame(sc, shard, { ...choice, side: 1 - choice.side, mode: 'archive' });
+    const replay = (opts) => {
+      if (!canPlay('archive', sc.id, gateCtx())) { location.hash = 'pass'; return; }
+      startGame(sc, shard, opts);
+    };
+    if (e.target.closest('[data-again]')) replay({ ...choice, seed: null, challenge: null, mode: 'archive' });
+    if (e.target.closest('[data-swap]')) replay({ ...choice, seed: null, challenge: null, side: 1 - choice.side, mode: 'archive' });
+    if (e.target.closest('[data-sharecard]')) {
+      const btn = e.target.closest('[data-sharecard]');
+      btn.disabled = true;
+      const blob = await resultCard({ event: sc.event, title: sc.title, team: sc.teams[res.side].nick, won: res.won, score: [res.score[res.side], res.score[1 - res.side]], grades: res.grades, stars: extra.stars || [0, 0, 0], color: teamColors(sc.teams[0].code, sc.teams[1].code)[res.side], url: siteUrl() });
+      const r = await shareResult({ text: shareText(app, sc, res), url: challengeUrl(sc, res), blob });
+      btn.disabled = false;
+      if (r === 'copied') toast('Copied. Paste it anywhere.');
+      if (r === 'failed') toast('Sharing is not available here. Copy the text instead.');
+    }
+    if (e.target.closest('[data-challenge]')) {
+      const url = challengeUrl(sc, res);
+      const r = await shareResult({ text: `I managed ${sc.title} (${sc.event}) and ${res.won ? 'won' : 'lost'} ${res.score[res.side]}-${res.score[1 - res.side]}. Same game, same luck. Can you manage it better?`, url });
+      if (r === 'copied') toast('Challenge link copied. Send it to a friend.');
+      if (r === 'failed') toast(url);
+    }
     if (e.target.closest('[data-next]')) { location.hash = 'survivor'; route(); }
   };
   // grade the real manager after the page is up, then settle the third star
@@ -255,6 +290,66 @@ async function renderSurvivor() {
   return renderPregame(id, { mode: 'survivor' });
 }
 
+// ---------------------------------------------------------------- season pass, challenges, save codes
+function siteUrl() { return location.origin + location.pathname; }
+function challengeUrl(sc, res) {
+  const grades = res.grades.map((x) => LETTER[x]).join('');
+  const score = `${res.won ? 'W' : 'L'}${res.score[res.side]}-${res.score[1 - res.side]}`;
+  return `${siteUrl()}#c-${[sc.id, res.side, res.start || 0, res.seed, grades || '0', score].join('~')}`;
+}
+
+async function renderChallenge(code) {
+  const [id, side, start, seed, grades, score] = code.split('~');
+  const got = id ? await getScenario(id) : null;
+  if (!got || !seed) return renderHome();
+  const { sc, shard } = got;
+  setNameShard(shard);
+  const si = Math.max(0, sc.starts.findIndex((st) => st.idx === +start));
+  const challenge = { won: /^W/.test(score || ''), score: String(score || '').slice(1), grades: String(grades || '').split('').map((c) => FROM_LETTER[c]).filter(Boolean) };
+  const choice = { id, side: +side === 1 ? 1 : 0, start: si, mode: 'challenge', seed, challenge };
+  app.pre = choice;
+  shell('archive', pregameHtml(app, sc, choice));
+  $('#main').onclick = (e) => { if (e.target.closest('[data-go]')) { unlock(); startGame(sc, shard, choice); } };
+}
+
+function renderPass(note) {
+  shell('archive', passHtml(app));
+  if (note) {
+    const intro = document.querySelector('.today .intro');
+    if (intro) intro.textContent = note;
+  }
+  const btn = document.getElementById('redeem');
+  if (btn) {
+    btn.onclick = async () => {
+      const msg = document.getElementById('passmsg');
+      btn.disabled = true;
+      msg.textContent = 'Checking…';
+      const r = await redeem(document.getElementById('passkey').value);
+      btn.disabled = false;
+      if (r.ok) { toast('Season Pass unlocked. Enjoy the archive.'); location.hash = 'archive'; route(); } else msg.textContent = r.why;
+    };
+  }
+}
+
+function wireStats() {
+  const sc = document.getElementById('savecode');
+  if (sc) {
+    sc.onclick = async () => {
+      const code = exportCode();
+      if (await copyText(code)) toast('Save code copied. Keep it somewhere safe.');
+      else { const t = document.getElementById('restore'); t.value = code; t.select(); toast('Select and copy the code in the box.'); }
+    };
+  }
+  const rb = document.getElementById('restorebtn');
+  if (rb) {
+    rb.onclick = () => {
+      if (importCode(document.getElementById('restore').value)) { toast('Record restored.'); route(); } else toast('That save code did not work. Copy the whole code and try again.');
+    };
+  }
+  const fp = document.getElementById('forgetpass');
+  if (fp) fp.onclick = () => { forget(); toast('Season Pass removed from this device.'); route(); };
+}
+
 // ---------------------------------------------------------------- boot
 async function boot() {
   app.dayNo = dayNumber();
@@ -267,6 +362,10 @@ async function boot() {
   }
   window.addEventListener('hashchange', route);
   route();
+  recheck();
+  if ('serviceWorker' in navigator && location.protocol === 'https:' && /github\.io|pages\.dev/.test(location.hostname)) {
+    navigator.serviceWorker.register('sw.js').catch(() => {});
+  }
 }
 
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);

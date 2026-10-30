@@ -28,6 +28,13 @@ function distance(a, b) {
   return Math.hypot(r1 - r2, g1 - g2, b1 - b2);
 }
 
+// The short names fans know, where Retrosheet's codes differ.
+const ABBR = {
+  ANA: 'LAA', CAL: 'CAL', CHA: 'CWS', CHN: 'CHC', KCA: 'KC', LAN: 'LAD', NYA: 'NYY', NYN: 'NYM', NY1: 'NYG',
+  SDN: 'SD', SFN: 'SF', SLN: 'STL', SLA: 'SLB', TBA: 'TB', WAS: 'WSH', WS1: 'WAS', FLO: 'FLA', MLN: 'MIL', BSN: 'BSN',
+};
+export const teamAbbr = (code) => ABBR[code] || code;
+
 // Colors for a matchup; the visitors switch to their alternate if the two clash.
 export function teamColors(visCode, homeCode) {
   const v = COLORS[visCode] || FALLBACK[0];

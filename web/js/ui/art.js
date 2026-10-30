@@ -5,25 +5,27 @@
 // from behind by the floodlights, so the body is dark with a chalk rim.
 export function batterSilhouette(side, color) {
   const flip = side === 'L' ? ' transform="translate(120 0) scale(-1 1)"' : '';
+  const pants = '#34353b', bat = '#8a6b45';
   return `<svg class="batter-svg" viewBox="0 0 120 220" aria-hidden="true">
     <g${flip}>
-      <g fill="${color}" stroke="${color}" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M48 47 L53 42 L27 3 L19 8 Z" stroke-width="1"/>
-        <path d="M60 58 L50 45" stroke-width="9" fill="none"/>
-        <path d="M77 58 Q66 52 50 45" stroke-width="9" fill="none"/>
-        <path d="M55 52 Q66 45 79 52 L85 98 Q70 108 52 101 Z" stroke-width="2"/>
-        <path d="M59 99 L46 146 L41 199" stroke-width="13" fill="none"/>
-        <path d="M76 99 L89 146 L97 199" stroke-width="13" fill="none"/>
-        <ellipse cx="38" cy="203" rx="11" ry="5" stroke-width="0"/>
-        <ellipse cx="102" cy="203" rx="11" ry="5" stroke-width="0"/>
-        <circle cx="67" cy="34" r="13" stroke-width="0"/>
-        <path d="M74 27 Q86 29 90 37 L74 37 Z" stroke-width="0"/>
+      <g stroke-linecap="round" stroke-linejoin="round">
+        <path d="M59 99 L46 146 L41 199" stroke="${pants}" stroke-width="13" fill="none"/>
+        <path d="M76 99 L89 146 L97 199" stroke="${pants}" stroke-width="13" fill="none"/>
+        <ellipse cx="38" cy="203" rx="11" ry="5" fill="#141416"/>
+        <ellipse cx="102" cy="203" rx="11" ry="5" fill="#141416"/>
+        <path d="M55 52 Q66 45 79 52 L85 98 Q70 108 52 101 Z" fill="${color}" stroke="${color}" stroke-width="2"/>
+        <circle cx="67" cy="34" r="13" fill="${color}"/>
+        <path d="M74 27 Q86 29 90 37 L74 37 Z" fill="${color}"/>
+        <g class="arms">
+          <path d="M48 47 L53 42 L27 3 L19 8 Z" fill="${bat}" stroke="${bat}" stroke-width="1"/>
+          <path d="M60 58 L50 45" stroke="${color}" stroke-width="9" fill="none"/>
+          <path d="M77 58 Q66 52 50 45" stroke="${color}" stroke-width="9" fill="none"/>
+        </g>
       </g>
       <g fill="none" stroke="var(--chalk)" stroke-opacity=".55" stroke-width="1.3" stroke-linecap="round">
         <path d="M58 22 Q66 19 75 24"/>
         <path d="M80 52 L86 98"/>
         <path d="M90 147 L98 199"/>
-        <path d="M27 3 L19 8"/>
       </g>
     </g>
   </svg>`;
