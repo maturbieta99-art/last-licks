@@ -11,7 +11,7 @@ const WEB = join(ROOT, 'web');
 const OUT = join(ROOT, '_site');
 
 const DESCRIPTION = 'Manage the 9th inning of 500 real historic postseason games. Call the pitches, give the signs, run the bullpen, and see how your calls grade out against the real managers.';
-const FAVICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='29' fill='%23f6f3e8' stroke='%231c4a2d' stroke-width='4'/%3E%3Cpath d='M15 13c9 9 9 29 0 38M49 13c-9 9-9 29 0 38' fill='none' stroke='%23c8102e' stroke-width='3.5' stroke-dasharray='4 3'/%3E%3C/svg%3E";
+const FAVICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='29' fill='%23f6f3e8' stroke='%23000' stroke-width='4'/%3E%3Cpath d='M15 13c9 9 9 29 0 38M49 13c-9 9-9 29 0 38' fill='none' stroke='%23c8102e' stroke-width='3.5' stroke-dasharray='4 3'/%3E%3C/svg%3E";
 
 export function buildSite() {
   build();
@@ -28,13 +28,13 @@ export function buildSite() {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="description" content="${DESCRIPTION}">
-<meta name="theme-color" content="#1c4a2d">
+<meta name="theme-color" content="#000000">
 <meta property="og:type" content="website">
 <meta property="og:title" content="Last Licks: manage the 9th">
 <meta property="og:description" content="${DESCRIPTION}">
 <meta name="twitter:card" content="summary">
 <link rel="icon" href="${FAVICON}">
-<style>:root{color-scheme:light;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}img{max-width:100%}[hidden]{display:none!important}</style>
+<style>:root{color-scheme:dark;background:#000;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}img{max-width:100%}[hidden]{display:none!important}</style>
 ${headPart}
 </head>
 <body>

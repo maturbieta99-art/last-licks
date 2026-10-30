@@ -2,12 +2,13 @@
 // private windows and blocked storage just mean nothing is remembered.
 
 const KEY = 'lastlicks.v1';
+const blankSettings = () => ({ calls: 'manual', sound: true, coach: 'auto', pace: 'normal', seen: {} });
 const blank = () => ({
   played: {}, daily: {}, streak: { cur: 0, best: 0, lastDay: 0 },
   survivor: { best: 0, run: null },
   totals: { games: 0, wins: 0, calls: { green: 0, yellow: 0, orange: 0, red: 0 },
     moves: { pitch: 0, ph: 0, pr: 0, bunt: 0, steal: 0, hitrun: 0, ibb: 0, visit: 0, def: 0, squeeze: 0 } },
-  settings: { theme: 'system', calls: 'manual' },
+  settings: blankSettings(),
 });
 
 let mem = null;
@@ -15,7 +16,10 @@ export function load() {
   if (mem) return mem;
   try {
     const raw = localStorage.getItem(KEY);
-    mem = raw ? { ...blank(), ...JSON.parse(raw) } : blank();
+    const got = raw ? JSON.parse(raw) : {};
+    mem = { ...blank(), ...got };
+    mem.settings = { ...blankSettings(), ...(got.settings || {}) };
+    delete mem.settings.theme;
   } catch {
     mem = blank();
   }
@@ -45,6 +49,24 @@ export function recordGame(r) {
     s.streak.best = Math.max(s.streak.best, s.streak.cur);
   }
   save();
+}
+
+// Stars for one game: [won, no costly calls, out-managed the real manager].
+// Each scenario keeps the best set earned in any game.
+export function recordStars(id, stars) {
+  const s = load();
+  const p = s.played[id] || (s.played[id] = { w: 0, l: 0 });
+  const prev = p.stars || [0, 0, 0];
+  p.stars = prev.map((v, i) => (v || stars[i] ? 1 : 0));
+  save();
+  return p.stars;
+}
+export const starCount = (id) => {
+  const p = load().played[id];
+  return p && p.stars ? p.stars.reduce((a, b) => a + b, 0) : 0;
+};
+export function totalStars() {
+  return Object.values(load().played).reduce((n, p) => n + (p.stars ? p.stars.reduce((a, b) => a + b, 0) : 0), 0);
 }
 
 export function managerStyle(t) {
