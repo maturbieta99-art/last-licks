@@ -34,6 +34,13 @@ export function buildSite() {
 <meta property="og:description" content="${DESCRIPTION}">
 <meta name="twitter:card" content="summary">
 <link rel="icon" href="${FAVICON}">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Last Licks">
+<meta property="og:image" content="icons/icon-512.png">
 <style>:root{color-scheme:dark;background:#000;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}img{max-width:100%}[hidden]{display:none!important}</style>
 ${headPart}
 </head>
@@ -47,6 +54,11 @@ ${bodyPart}
   for (const f of readdirSync(join(WEB, 'data'))) {
     if (f.endsWith('.json')) copyFileSync(join(WEB, 'data', f), join(OUT, 'data', f));
   }
+  // installable app: manifest, service worker (offline fallback) and icons
+  copyFileSync(join(WEB, 'manifest.webmanifest'), join(OUT, 'manifest.webmanifest'));
+  copyFileSync(join(WEB, 'sw.js'), join(OUT, 'sw.js'));
+  mkdirSync(join(OUT, 'icons'), { recursive: true });
+  for (const f of readdirSync(join(WEB, 'icons'))) copyFileSync(join(WEB, 'icons', f), join(OUT, 'icons', f));
   writeFileSync(join(OUT, '.nojekyll'), '');
   return OUT;
 }
