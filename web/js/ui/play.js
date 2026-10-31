@@ -945,7 +945,7 @@ export function mountGame(root, ctx) {
     const coach = coachOn();
     if (!userBatting()) {
       const M = g.matchup();
-      const types = M.types.map((t, i) => `<button class="ptype" data-ti="${i}" aria-pressed="${C.ui.ti === i}"><span class="kbd k">${i + 1}</span><b>${esc((PITCH_TYPES[t.key] || {}).short || t.key)}</b><small>${Math.round(t.q)} grade · ${t.use}%${coach && PITCH_HELP[t.key] ? ` · ${PITCH_HELP[t.key]}` : ''}</small></button>`).join('');
+      const types = M.types.map((t, i) => `<button class="ptype" data-ti="${i}" aria-pressed="${C.ui.ti === i}"><span class="kbd k">${i + 1}</span><b>${esc((PITCH_TYPES[t.key] || {}).short || t.key)}</b><small>${Math.round(t.q)} grade · ${t.use}%${coach && PITCH_HELP[t.key] ? `<span class="help"> · ${PITCH_HELP[t.key]}</span>` : ''}</small></button>`).join('');
       return `<div class="g-side"><div class="g-stat">${statusText()}</div><div class="ptypes">${types}</div></div>`;
     }
     const ap = (val, small) => `<button data-approach="${val}" aria-pressed="${C.ui.approach === val}">${APPROACH[val]}${coach ? `<small>${small}</small>` : ''}</button>`;

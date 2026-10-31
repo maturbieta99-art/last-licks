@@ -7,6 +7,7 @@
 //   BASE=https://… node tests/layout.mjs        checks a deployed copy instead
 //   CHROME=/path/to/chrome node tests/layout.mjs
 //   SHOTS=some/folder node tests/layout.mjs     also saves a screenshot of each layout
+//   GAMES=ARI200110140 node tests/layout.mjs    other games (that one has a 4-pitch starter)
 import { spawn } from 'node:child_process';
 import { existsSync, mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -30,7 +31,7 @@ const SIZES = [
   ['iPhone SE', 375, 553], ['iPhone', 390, 664], ['iPhone Pro Max', 430, 740], ['iPhone sideways', 844, 390],
   ['iPhone SE sideways', 667, 375], ['laptop', 1280, 800],
 ];
-const GAMES = ['ARI200111040', 'LAN202110060'];
+const GAMES = process.env.GAMES ? process.env.GAMES.split(',') : ['ARI200111040', 'LAN202110060'];
 
 const MEASURE = `(() => {
   const q = (s) => document.querySelector(s);
@@ -45,6 +46,12 @@ const MEASURE = `(() => {
   if (!inside(S, P) || !inside(S, V)) bad.push('batter cut off');
   if (p.scrollWidth > p.clientWidth + e) bad.push('panel content ' + (p.scrollWidth - p.clientWidth) + 'px too wide');
   if (p.scrollHeight > p.clientHeight + e) bad.push('panel content ' + (p.scrollHeight - p.clientHeight) + 'px too tall');
+  // sideways phones and short windows: the signs or pitch types beside the zone need room to read and tap
+  const sd = q('.g-panel .g-side');
+  if (sd && innerWidth > innerHeight && innerHeight < 600) {
+    if (sd.clientWidth < 120) bad.push('buttons beside the zone only ' + sd.clientWidth + 'px wide');
+    if (sd.scrollHeight > sd.clientHeight + e) bad.push('buttons beside the zone hide ' + (sd.scrollHeight - sd.clientHeight) + 'px in a scroll');
+  }
   const bs = q('.g-board .board-scroll');
   if (bs && bs.offsetParent && bs.scrollWidth > bs.clientWidth + e) bad.push('line score cut off');
   if (D.bottom > innerHeight + e || D.right > innerWidth + e) bad.push('buttons off screen');
