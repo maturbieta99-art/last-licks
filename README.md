@@ -49,7 +49,9 @@ game reaches the same spot.
 - `tests/` run with Node: `node tests/calib.mjs`, `node tests/wp.mjs`,
   `node tests/simall.mjs 500`, `node tests/starts.mjs`, `node tests/pace.mjs`
   (how often auto-play stops for the player), `node tests/look.mjs` (the look-for-a-pitch
-  fairness check) and `node tests/pitchgrade.mjs` (the pitch-call grade scale).
+  fairness check), `node tests/pitchgrade.mjs` (the pitch-call grade scale) and
+  `node tests/layout.mjs` (the game screen fits 30 phone and iPad window sizes, both ways
+  up, with nothing cut off; drives a headless Chrome).
 
 ## Working on it
 

@@ -872,7 +872,7 @@ export function mountGame(root, ctx) {
   }
   function renderStatus() {
     const el = root.querySelector('.g-stat');
-    if (el) el.innerHTML = statusText();
+    if (el) { el.innerHTML = statusText(); fitPanel(); }
   }
 
   function plateView(interactive) {
@@ -1047,6 +1047,22 @@ export function mountGame(root, ctx) {
     if (bar) requestAnimationFrame(() => requestAnimationFrame(() => { bar.style.width = bar.dataset.to + '%'; }));
     C.shownWp = w;
     setCrowd(pr);
+    fitPanel();
+  }
+
+  // The zone's size in the stylesheet is a guess from the window size. Measure:
+  // if the at-bat still doesn't fit (Safari's toolbars, Stage Manager windows,
+  // a long status line, five pitch types), shrink the zone until it does.
+  function fitPanel() {
+    const gs = root.querySelector('.gs'), p = gs && gs.querySelector('.g-panel'), z = p && p.querySelector('.zone');
+    if (!z) return;
+    gs.style.removeProperty('--zc');
+    for (let i = 0; i < 4; i++) {
+      const over = Math.max(p.scrollHeight - p.clientHeight, gs.scrollHeight - gs.clientHeight);
+      const cell = (z.offsetHeight - 22) / 5;
+      if (over <= 0 || cell <= 20) return;
+      gs.style.setProperty('--zc', Math.max(20, Math.floor(cell - over / 5 - 0.5)) + 'px');
+    }
   }
 
   // ------------------------------------------------------------ events
@@ -1172,8 +1188,10 @@ export function mountGame(root, ctx) {
     }
   };
   document.addEventListener('keydown', onKey);
+  window.addEventListener('resize', fitPanel);
   C.destroy = () => {
     document.removeEventListener('keydown', onKey);
+    window.removeEventListener('resize', fitPanel);
     C.timers.forEach(clearTimeout);
     clearTimeout(C.autoTimer);
     C.done = true;
